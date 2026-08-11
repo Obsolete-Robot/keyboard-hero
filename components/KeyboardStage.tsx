@@ -13,9 +13,12 @@ import "./KeyboardStage.css";
 const FIRST_MIDI_NOTE = 48;
 const KEY_COUNT = 25;
 const WHITE_KEY_WIDTH = 0.7;
-const HIT_Z = 1.82;
-const FAR_Z = -14.7;
+// The strike zone sits a full key-depth above the controller deck so timing is
+// readable before a note reaches the physical key.
+const HIT_Z = -0.72;
+const FAR_Z = -19.5;
 const TRAVEL_DISTANCE = HIT_Z - FAR_Z;
+const POST_HIT_BEATS = 1.45;
 const BLACK_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 
 export type KeyboardNoteState =
@@ -83,6 +86,8 @@ export interface KeyboardStageProps {
   /** Number of upcoming beats visible on the highway. */
   travelBeats?: number;
   showHud?: boolean;
+  /** Short label centered over the timing target. */
+  strikeLabel?: string;
   className?: string;
   style?: CSSProperties;
   ariaLabel?: string;
@@ -293,6 +298,7 @@ export default function KeyboardStage({
   intensity = 1,
   travelBeats = 8,
   showHud = true,
+  strikeLabel = "PLAY HERE",
   className = "",
   style,
   ariaLabel = "Interactive 3D 25-key Keyboard Hero performance stage",
@@ -302,6 +308,7 @@ export default function KeyboardStage({
 }: KeyboardStageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const strikeZoneRef = useRef<HTMLDivElement>(null);
   const notesRef = useRef(notes);
   const currentBeatRef = useRef(currentBeat);
   const currentTimeRef = useRef(currentTime);
@@ -476,11 +483,18 @@ export default function KeyboardStage({
       );
       laneMaterials.push(laneMaterial);
       const lane = new THREE.Mesh(
-        new THREE.PlaneGeometry(key.width * (key.isBlack ? 0.74 : 0.9), 16.1),
+        new THREE.PlaneGeometry(
+          key.width * (key.isBlack ? 0.74 : 0.9),
+          TRAVEL_DISTANCE - 0.35,
+        ),
         laneMaterial,
       );
       lane.rotation.x = -Math.PI / 2;
-      lane.position.set(key.x, key.isBlack ? 0.024 : 0.008, -6.2);
+      lane.position.set(
+        key.x,
+        key.isBlack ? 0.024 : 0.008,
+        (FAR_Z + HIT_Z) / 2,
+      );
       world.add(lane);
     });
 
@@ -544,35 +558,82 @@ export default function KeyboardStage({
       new THREE.MeshStandardMaterial({
         color: paletteRef.current.primary,
         emissive: paletteRef.current.primary,
-        emissiveIntensity: 4,
-        roughness: 0.2,
-        metalness: 0.25,
+        emissiveIntensity: 6,
+        roughness: 0.12,
+        metalness: 0.15,
       }),
       "primary",
     );
     const hitLine = new THREE.Mesh(
-      new THREE.BoxGeometry(KEYBOARD_WIDTH + 0.45, 0.09, 0.1),
+      new THREE.BoxGeometry(KEYBOARD_WIDTH + 0.72, 0.12, 0.16),
       hitMaterial,
     );
-    hitLine.position.set(0, 0.15, HIT_Z);
+    hitLine.position.set(0, 0.19, HIT_Z);
     world.add(hitLine);
     const hitHaloMaterial = addThemedMaterial(
       new THREE.MeshBasicMaterial({
         color: paletteRef.current.primary,
         transparent: true,
-        opacity: 0.28,
+        opacity: 0.38,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
+        side: THREE.DoubleSide,
       }),
       "primary",
     );
     const hitHalo = new THREE.Mesh(
-      new THREE.PlaneGeometry(KEYBOARD_WIDTH + 0.8, 0.42),
+      new THREE.PlaneGeometry(KEYBOARD_WIDTH + 1.02, 0.82),
       hitHaloMaterial,
     );
     hitHalo.rotation.x = -Math.PI / 2;
-    hitHalo.position.set(0, 0.075, HIT_Z);
+    hitHalo.position.set(0, 0.07, HIT_Z);
     world.add(hitHalo);
+
+    const nearEdgeMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf7fdff,
+      emissive: 0xd9faff,
+      emissiveIntensity: 5,
+      roughness: 0.1,
+      metalness: 0.08,
+    });
+    const farEdgeMaterial = addThemedMaterial(
+      new THREE.MeshStandardMaterial({
+        color: paletteRef.current.secondary,
+        emissive: paletteRef.current.secondary,
+        emissiveIntensity: 3.4,
+        roughness: 0.12,
+        metalness: 0.12,
+      }),
+      "secondary",
+    );
+    const nearEdge = new THREE.Mesh(
+      new THREE.BoxGeometry(KEYBOARD_WIDTH + 0.98, 0.065, 0.07),
+      nearEdgeMaterial,
+    );
+    nearEdge.position.set(0, 0.15, HIT_Z + 0.4);
+    world.add(nearEdge);
+    const farEdge = new THREE.Mesh(
+      new THREE.BoxGeometry(KEYBOARD_WIDTH + 0.98, 0.065, 0.07),
+      farEdgeMaterial,
+    );
+    farEdge.position.set(0, 0.15, HIT_Z - 0.4);
+    world.add(farEdge);
+
+    const hitSweepMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.42,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const hitSweep = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.48, 0.76),
+      hitSweepMaterial,
+    );
+    hitSweep.rotation.x = -Math.PI / 2;
+    hitSweep.position.set(-KEYBOARD_WIDTH / 2, 0.115, HIT_Z);
+    world.add(hitSweep);
 
     const bodyMaterial = addThemedMaterial(
       new THREE.MeshStandardMaterial({
@@ -790,7 +851,8 @@ export default function KeyboardStage({
     for (let index = 0; index < ambientParticleCount; index += 1) {
       ambientPositions[index * 3] = (Math.random() - 0.5) * 13;
       ambientPositions[index * 3 + 1] = 0.5 + Math.random() * 5.5;
-      ambientPositions[index * 3 + 2] = FAR_Z + Math.random() * 19;
+      ambientPositions[index * 3 + 2] =
+        FAR_Z + Math.random() * (5.2 - FAR_Z);
     }
     const ambientGeometry = new THREE.BufferGeometry();
     ambientGeometry.setAttribute(
@@ -821,6 +883,9 @@ export default function KeyboardStage({
     const pointerNotes = new Map<number, number>();
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
+    const strikeCenter = new THREE.Vector3();
+    const strikeLeft = new THREE.Vector3();
+    const strikeRight = new THREE.Vector3();
 
     const createNoteVisual = (note: KeyboardStageNote) => {
       const color = noteColor(note, paletteRef.current);
@@ -1026,7 +1091,42 @@ export default function KeyboardStage({
       camera.fov = width < 620 ? 43 : width < 900 ? 39 : 36;
       camera.position.z = width < 620 ? 13.8 : width < 900 ? 12.8 : 12.1;
       camera.position.y = width < 620 ? 9.5 : 8.9;
+      camera.lookAt(0, 0.1, -2.1);
       camera.updateProjectionMatrix();
+    };
+
+    const updateStrikeZoneProjection = () => {
+      const strikeZone = strikeZoneRef.current;
+      if (!strikeZone) return;
+      const width = Math.max(1, root.clientWidth);
+      const height = Math.max(1, root.clientHeight);
+      const halfWidth = (KEYBOARD_WIDTH + 1.02) / 2;
+
+      world.updateWorldMatrix(true, false);
+      camera.updateMatrixWorld();
+      strikeCenter.set(0, 0.16, HIT_Z);
+      strikeLeft.set(-halfWidth, 0.16, HIT_Z);
+      strikeRight.set(halfWidth, 0.16, HIT_Z);
+      world.localToWorld(strikeCenter).project(camera);
+      world.localToWorld(strikeLeft).project(camera);
+      world.localToWorld(strikeRight).project(camera);
+
+      const centerX = (strikeCenter.x * 0.5 + 0.5) * width;
+      const centerY = (-strikeCenter.y * 0.5 + 0.5) * height;
+      const leftX = (strikeLeft.x * 0.5 + 0.5) * width;
+      const leftY = (-strikeLeft.y * 0.5 + 0.5) * height;
+      const rightX = (strikeRight.x * 0.5 + 0.5) * width;
+      const rightY = (-strikeRight.y * 0.5 + 0.5) * height;
+      const projectedWidth = Math.hypot(rightX - leftX, rightY - leftY);
+      const angle = Math.atan2(rightY - leftY, rightX - leftX);
+
+      strikeZone.style.setProperty("--kh-strike-x", `${centerX}px`);
+      strikeZone.style.setProperty("--kh-strike-y", `${centerY}px`);
+      strikeZone.style.setProperty(
+        "--kh-strike-width",
+        `${Math.min(Math.max(1, width - 18), Math.max(150, projectedWidth))}px`,
+      );
+      strikeZone.style.setProperty("--kh-strike-angle", `${angle}rad`);
     };
 
     const hitTest = (event: PointerEvent) => {
@@ -1127,7 +1227,8 @@ export default function KeyboardStage({
         const durationBeats = Math.max(0.08, note.durationBeats ?? 0.28);
         const tailBeat = note.startBeat + durationBeats;
         const visible =
-          note.startBeat <= beat + visibleBeats + 0.2 && tailBeat >= beat - 0.8;
+          note.startBeat <= beat + visibleBeats + 0.65 &&
+          tailBeat >= beat - POST_HIT_BEATS;
         let visual = noteVisuals.get(note.id);
         if (!visible) {
           if (visual) visual.group.visible = false;
@@ -1249,10 +1350,26 @@ export default function KeyboardStage({
       });
 
       const beatPulse = Math.pow(1 - beatFraction, 5);
-      hitMaterial.emissiveIntensity = 2.5 + beatPulse * (2.2 + activeIntensity);
+      hitMaterial.emissiveIntensity =
+        5.2 + beatPulse * (3.8 + activeIntensity * 1.4);
       hitHaloMaterial.opacity =
-        0.16 + beatPulse * 0.2 + Math.min(0.32, flashEnergy * 0.18);
-      hitHalo.scale.y = 1 + beatPulse * 0.65;
+        0.3 + beatPulse * 0.26 + Math.min(0.34, flashEnergy * 0.2);
+      hitHalo.scale.y = 1 + beatPulse * 0.42;
+      hitLine.scale.z = 1 + beatPulse * 0.6;
+      nearEdgeMaterial.emissiveIntensity = 4.2 + beatPulse * 4.5;
+      farEdgeMaterial.emissiveIntensity =
+        2.8 + beatPulse * (3 + activeIntensity);
+      if (reduceMotion) {
+        hitSweep.position.x = 0;
+        hitSweepMaterial.opacity = 0.16;
+      } else {
+        const sweepProgress = (now * 0.00034) % 1;
+        hitSweep.position.x =
+          -KEYBOARD_WIDTH / 2 - 0.4 +
+          sweepProgress * (KEYBOARD_WIDTH + 0.8);
+        hitSweepMaterial.opacity =
+          0.25 + Math.sin(sweepProgress * Math.PI) * 0.34;
+      }
       primaryLight.intensity = 9 + activeIntensity * 4 + flashEnergy * 11;
       secondaryLight.intensity = 8 + activeIntensity * 3;
       flashEnergy *= Math.pow(0.015, deltaSeconds);
@@ -1269,6 +1386,8 @@ export default function KeyboardStage({
         }
         camera.lookAt(0, 0.1, -2.1);
       }
+
+      updateStrikeZoneProjection();
 
       if (now - lastDisplayUpdate > 180) {
         drawDisplay();
@@ -1344,6 +1463,22 @@ export default function KeyboardStage({
 
       <div className="kh-stage__atmosphere" aria-hidden="true" />
       <div className="kh-stage__scanlines" aria-hidden="true" />
+
+      {!webglError && (
+        <div
+          ref={strikeZoneRef}
+          className="kh-stage__strike-zone"
+          data-ready={ready ? "true" : "false"}
+          aria-hidden="true"
+        >
+          <div className="kh-stage__strike-sweep" />
+          <div className="kh-stage__strike-label">
+            <i />
+            <span>{strikeLabel}</span>
+            <i />
+          </div>
+        </div>
+      )}
 
       {showHud && !webglError && (
         <div className="kh-stage__hud" aria-hidden="true">

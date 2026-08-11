@@ -225,6 +225,10 @@ export default function Home() {
   const nextNote = nextSongNote(song, hero.positionBeat);
   const coach = modeCopy(hero.settings.practiceMode);
   const totalSeconds = getSongDurationSeconds(song, hero.settings.tempoScale);
+  const noteApproachBeats = Math.max(
+    1.25,
+    (song.bpm * hero.settings.tempoScale * 4.6) / 60,
+  );
   const progress = Math.min(100, (hero.positionBeat / song.durationBeats) * 100);
   const loopStart = Math.min(100, (hero.loop.startBeat / song.durationBeats) * 100);
   const loopEnd = Math.min(100, (hero.loop.endBeat / song.durationBeats) * 100);
@@ -334,7 +338,7 @@ export default function Home() {
           <div className="stage-wrap">
             <KeyboardStage
               ariaLabel="Three-dimensional 25-key practice keyboard and falling note highway"
-              currentBeat={hero.positionBeat}
+              currentBeat={hero.visualBeat}
               currentTime={hero.positionSeconds}
               feedback={stageFeedback}
               intensity={Math.min(1.75, 0.85 + hero.score.combo / 28)}
@@ -344,7 +348,7 @@ export default function Home() {
               pressedMidiNotes={hero.pressedNotes}
               showHud={false}
               theme="electric"
-              travelBeats={10}
+              travelBeats={noteApproachBeats}
             />
 
             <div className="stage-head">
@@ -385,7 +389,9 @@ export default function Home() {
 
             {hero.countdown !== null && hero.countdown > 0 && (
               <div className="count-in" aria-live="assertive">
+                <span className="count-in-kicker">Get ready</span>
                 <strong key={hero.countdown}>{hero.countdown}</strong>
+                <span className="count-in-cue">First note hits the bright bar at zero</span>
               </div>
             )}
           </div>

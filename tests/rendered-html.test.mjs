@@ -35,6 +35,7 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /Connect MIDI/);
   assert.match(html, /Practice mode/);
   assert.match(html, /Three-dimensional 25-key practice keyboard/);
+  assert.match(html, /PLAY HERE/);
   assert.match(html, /Learn the notes\. Feel the stage\./);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
@@ -51,6 +52,8 @@ test("ships the finished game rather than starter assets", async () => {
 
   assert.match(page, /useKeyboardHeroCore/);
   assert.match(page, /<KeyboardStage/);
+  assert.match(page, /currentBeat=\{hero\.visualBeat\}/);
+  assert.match(page, /First note hits the bright bar at zero/);
   assert.match(page, /\["flow", "wait", "listen"\]/);
   assert.match(layout, /openGraph/);
   assert.match(layout, /\/og\.png/);
@@ -59,7 +62,11 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(songs, /export const SONGS: Song\[]/);
   assert.match(songs, /title: "Neon Skyline Finale"/);
   assert.match(stage, /const KEY_COUNT = 25/);
+  assert.match(stage, /const HIT_Z = -0\.72/);
+  assert.match(stage, /strikeLabel = "PLAY HERE"/);
   assert.match(engine, /requestMIDIAccess/);
+  assert.match(engine, /const PRE_ROLL_SECONDS = 5/);
+  assert.match(engine, /visualBeat/);
   assert.match(engine, /tempoScale: clamp\(scale, 0\.25, 1\.25\)/);
 
   await access(new URL("../public/og.png", import.meta.url));

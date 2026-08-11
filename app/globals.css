@@ -432,21 +432,49 @@ input:focus-visible {
 .count-in {
   position: absolute;
   z-index: 20;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: rgba(5, 5, 9, 0.38);
+  top: 74px;
+  left: 50%;
+  width: min(310px, calc(100% - 32px));
+  display: flex;
+  transform: translateX(-50%);
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 18px 12px;
+  border-top: 1px solid rgba(215, 255, 63, 0.8);
+  border-bottom: 1px solid rgba(215, 255, 63, 0.3);
+  background: rgba(5, 5, 9, 0.66);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.32), 0 0 36px rgba(215, 255, 63, 0.08);
   pointer-events: none;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(8px);
+}
+
+.count-in-kicker,
+.count-in-cue {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.count-in-kicker {
+  color: var(--acid);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.22em;
+}
+
+.count-in-cue {
+  color: rgba(248, 247, 242, 0.72);
+  font-size: 8px;
+  letter-spacing: 0.09em;
 }
 
 .count-in strong {
   color: var(--acid);
-  font: 950 clamp(88px, 15vw, 210px)/0.8 var(--font-sans);
+  margin: 3px 0 2px;
+  font: 950 clamp(52px, 7vw, 82px)/0.82 var(--font-sans);
   font-style: italic;
   letter-spacing: -0.1em;
-  text-shadow: 0 0 70px rgba(215, 255, 63, 0.32);
-  animation: count-pop 480ms ease-out both;
+  text-shadow: 0 0 42px rgba(215, 255, 63, 0.42);
+  animation: count-pop 560ms ease-out both;
 }
 
 @keyframes count-pop {
