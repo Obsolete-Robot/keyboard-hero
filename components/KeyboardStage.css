@@ -15,13 +15,13 @@
     radial-gradient(circle at 82% 22%, color-mix(in srgb, var(--kh-secondary) 18%, transparent), transparent 31%),
     var(--kh-background);
   border: 1px solid color-mix(in srgb, var(--kh-primary) 24%, transparent);
-  border-radius: 26px;
+  border-radius: 12px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     inset 0 -40px 90px rgba(0, 0, 0, 0.28),
     0 30px 90px rgba(1, 4, 18, 0.45),
     0 0 60px color-mix(in srgb, var(--kh-primary) 8%, transparent);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   container-type: inline-size;
 }
 
@@ -145,7 +145,7 @@
 .kh-stage__strike-label span {
   padding: 3px 6px 2px;
   border: 1px solid color-mix(in srgb, var(--kh-primary) 48%, rgba(244, 252, 255, 0.46));
-  border-radius: 4px;
+  border-radius: 0;
   color: rgba(239, 251, 255, 0.92);
   background: rgba(3, 8, 19, 0.78);
   box-shadow:
@@ -349,9 +349,11 @@
 .kh-stage__fallback h3 {
   margin: 0;
   color: #f4fbff;
-  font-size: clamp(21px, 4vw, 32px);
-  line-height: 1.1;
-  letter-spacing: -0.025em;
+  font-family: var(--font-bebas-neue), "Arial Narrow", Impact, sans-serif;
+  font-size: clamp(32px, 5vw, 52px);
+  line-height: 0.9;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .kh-stage__fallback > p:not(.kh-stage__fallback-kicker) {

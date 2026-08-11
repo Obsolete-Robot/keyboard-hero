@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Bebas_Neue, Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
 
@@ -11,6 +11,12 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const bebasNeue = Bebas_Neue({
+  variable: "--font-bebas-neue",
+  subsets: ["latin"],
+  weight: "400",
 });
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -38,9 +44,9 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: "Keyboard Hero",
       images: [
         {
-          url: `${origin}/og.png`,
-          width: 1734,
-          height: 907,
+          url: `${origin}/og-rock-v2.png`,
+          width: 1731,
+          height: 908,
           alt: "Keyboard Hero — Learn the notes. Feel the stage.",
         },
       ],
@@ -49,7 +55,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      images: [`${origin}/og.png`],
+      images: [`${origin}/og-rock-v2.png`],
     },
   };
 }
@@ -62,7 +68,17 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${bebasNeue.variable} antialiased`}
+        style={
+          {
+            "--font-geist-sans": geistSans.style.fontFamily,
+            "--font-geist-mono": geistMono.style.fontFamily,
+            "--font-bebas-neue": bebasNeue.style.fontFamily,
+            "--font-sans": geistSans.style.fontFamily,
+            "--font-mono": geistMono.style.fontFamily,
+            "--font-display": bebasNeue.style.fontFamily,
+          } as React.CSSProperties
+        }
       >
         {children}
       </body>

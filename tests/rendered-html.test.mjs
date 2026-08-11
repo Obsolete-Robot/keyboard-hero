@@ -77,7 +77,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /result\.grade === "miss"/);
   assert.match(page, /\["flow", "wait", "listen"\]/);
   assert.match(layout, /openGraph/);
-  assert.match(layout, /\/og\.png/);
+  assert.match(layout, /\/og-rock-v2\.png/);
   assert.match(packageJson, /"three"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(songs, /export const SONGS: Song\[]/);
@@ -106,6 +106,6 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /visualBeat/);
   assert.match(engine, /tempoScale: clamp\(scale, 0\.25, 1\.25\)/);
 
-  await access(new URL("../public/og.png", import.meta.url));
+  await access(new URL("../public/og-rock-v2.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
 });
