@@ -74,29 +74,20 @@
 }
 
 .kh-stage__strike-zone {
-  --kh-strike-x: 50%;
-  --kh-strike-y: 43%;
   --kh-strike-width: min(78%, 720px);
-  --kh-strike-angle: 0rad;
   position: absolute;
   z-index: 5;
-  top: var(--kh-strike-y);
-  left: var(--kh-strike-x);
+  top: 0;
+  left: 0;
   width: var(--kh-strike-width);
-  height: 38px;
-  overflow: hidden;
-  border-top: 2px solid color-mix(in srgb, var(--kh-secondary) 85%, white);
-  border-bottom: 2px solid rgba(247, 253, 255, 0.96);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--kh-secondary) 21%, transparent), transparent 42%, color-mix(in srgb, var(--kh-primary) 28%, transparent)),
-    linear-gradient(90deg, transparent, color-mix(in srgb, var(--kh-primary) 16%, transparent) 17%, color-mix(in srgb, var(--kh-primary) 24%, transparent) 50%, color-mix(in srgb, var(--kh-primary) 16%, transparent) 83%, transparent);
+  height: 2px;
+  overflow: visible;
+  background: linear-gradient(90deg, transparent, rgba(245, 253, 255, 0.92) 7%, var(--kh-primary) 50%, rgba(245, 253, 255, 0.92) 93%, transparent);
   box-shadow:
-    0 -3px 15px color-mix(in srgb, var(--kh-secondary) 65%, transparent),
-    0 3px 18px color-mix(in srgb, var(--kh-primary) 80%, transparent),
-    inset 0 9px 20px color-mix(in srgb, var(--kh-secondary) 14%, transparent),
-    inset 0 -9px 20px color-mix(in srgb, var(--kh-primary) 22%, transparent);
+    0 0 4px rgba(245, 253, 255, 0.76),
+    0 0 10px color-mix(in srgb, var(--kh-primary) 58%, transparent);
   opacity: 0;
-  transform: translate(-50%, -50%) rotate(var(--kh-strike-angle));
+  transform: translate3d(-200vw, -200vh, 0) translate(-50%, -50%);
   transition: opacity 220ms ease;
   pointer-events: none;
   animation: kh-stage-strike-pulse 1.15s ease-in-out infinite;
@@ -108,21 +99,21 @@
 
 .kh-stage__strike-zone::after {
   position: absolute;
-  inset: 4px 0;
-  border-top: 1px solid color-mix(in srgb, var(--kh-primary) 43%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--kh-secondary) 38%, transparent);
+  inset: -2px 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--kh-primary) 13%, transparent), transparent);
+  filter: blur(2px);
   content: "";
 }
 
 .kh-stage__strike-sweep {
   position: absolute;
   z-index: 1;
-  top: -35%;
-  bottom: -35%;
+  top: -2px;
   left: -18%;
-  width: 15%;
+  width: 12%;
+  height: 6px;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.78), transparent);
-  filter: blur(2px);
+  filter: blur(1px);
   mix-blend-mode: screen;
   transform: skewX(-16deg);
   animation: kh-stage-strike-sweep 2.2s cubic-bezier(0.25, 0.7, 0.3, 1) infinite;
@@ -131,15 +122,17 @@
 .kh-stage__strike-label {
   position: absolute;
   z-index: 2;
-  inset: 0;
+  right: 0;
+  bottom: 6px;
+  left: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 6px;
 }
 
 .kh-stage__strike-label i {
-  width: clamp(20px, 7cqi, 82px);
+  width: clamp(14px, 5cqi, 54px);
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(244, 252, 255, 0.82));
   box-shadow: 0 0 8px var(--kh-primary);
@@ -150,23 +143,22 @@
 }
 
 .kh-stage__strike-label span {
-  min-width: 96px;
-  padding: 5px 12px 4px;
-  border: 1px solid rgba(244, 252, 255, 0.85);
-  border-radius: 999px;
-  color: #06101a;
-  background: rgba(239, 252, 255, 0.94);
+  padding: 3px 6px 2px;
+  border: 1px solid color-mix(in srgb, var(--kh-primary) 48%, rgba(244, 252, 255, 0.46));
+  border-radius: 4px;
+  color: rgba(239, 251, 255, 0.92);
+  background: rgba(3, 8, 19, 0.78);
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--kh-primary) 28%, transparent),
-    0 0 22px color-mix(in srgb, var(--kh-primary) 75%, transparent);
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 0 9px color-mix(in srgb, var(--kh-primary) 25%, transparent);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 9px;
+  font-size: 7px;
   font-style: normal;
   font-weight: 950;
   line-height: 1;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   text-align: center;
-  text-indent: 0.16em;
+  text-indent: 0.14em;
   white-space: nowrap;
 }
 
@@ -438,14 +430,9 @@
     display: none;
   }
 
-  .kh-stage__strike-zone {
-    height: 32px;
-  }
-
   .kh-stage__strike-label span {
-    min-width: 82px;
-    padding-inline: 9px;
-    font-size: 8px;
+    padding-inline: 5px;
+    font-size: 6px;
   }
 }
 

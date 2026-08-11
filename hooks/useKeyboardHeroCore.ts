@@ -72,10 +72,16 @@ export interface KeyboardHeroCore {
   visualBeat: number;
   positionSeconds: number;
   isPlaying: boolean;
+  /** True while the non-interactive visual tail clears the stage. */
+  isFinishing: boolean;
+  /** True only after natural playback and its visual tail have completed. */
+  songComplete: boolean;
   countdown: number | null;
   pressedNotes: Set<number>;
   noteResults: Map<string, NoteResult>;
   latestFeedback: NoteResult | null;
+  /** Recent uniquely keyed hit/miss events, including simultaneous chord tones. */
+  feedbackEvents: NoteResult[];
   score: KeyboardHeroScore;
   midi: KeyboardHeroMIDIState;
   settings: KeyboardHeroSettings;
@@ -123,6 +129,9 @@ type MIDIEnabledNavigator = Navigator & {
 
 const SETTINGS_KEY = "keyboard-hero.settings.v1";
 const PRE_ROLL_SECONDS = 5;
+const POST_ROLL_MIN_SECONDS = 2.5;
+const POST_ROLL_CLEARANCE_BEATS = 1.75;
+const FEEDBACK_HISTORY_LIMIT = 16;
 const DEFAULT_SETTINGS: KeyboardHeroSettings = {
   tempoScale: 1,
   practiceMode: "flow",
@@ -226,12 +235,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const [positionBeat, setPositionBeatState] = useState(0);
   const [visualBeat, setVisualBeat] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isFinishing, setIsFinishing] = useState(false);
+  const [songComplete, setSongComplete] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [pressedNotes, setPressedNotes] = useState<Set<number>>(() => new Set());
   const [noteResults, setNoteResults] = useState<Map<string, NoteResult>>(
     () => new Map(),
   );
   const [latestFeedback, setLatestFeedback] = useState<NoteResult | null>(null);
+  const [feedbackEvents, setFeedbackEvents] = useState<NoteResult[]>([]);
   const [score, setScore] = useState<KeyboardHeroScore>(EMPTY_SCORE);
   const [loop, setLoopState] = useState<KeyboardHeroLoop>({
     enabled: false,
@@ -262,6 +274,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const settingsRef = useRef(settings);
   const loopRef = useRef(loop);
   const isPlayingRef = useRef(false);
+  const isFinishingRef = useRef(false);
+  const postRollStartTimeRef = useRef(0);
+  const postRollBeatRateRef = useRef(0);
+  const postRollDurationRef = useRef(POST_ROLL_MIN_SECONDS);
   const countInSecondsRef = useRef(0);
   const countInEndTimeRef = useRef(0);
   const countInBeatRateRef = useRef(0);
@@ -269,6 +285,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const heldSourcesRef = useRef<Map<number, Set<string>>>(new Map());
   const listenVoicesRef = useRef<Set<string>>(new Set());
   const lastMetronomeBeatRef = useRef<number | null>(null);
+  const feedbackSequenceRef = useRef(0);
 
   const synth = useCallback((): KeyboardSynth => {
     synthRef.current ??= new KeyboardSynth();
@@ -293,21 +310,42 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     listenVoicesRef.current.clear();
   }, []);
 
+  const resetScore = useCallback(() => {
+    resultsRef.current = new Map();
+    setNoteResults(new Map());
+    setLatestFeedback(null);
+    setFeedbackEvents([]);
+    setScore(EMPTY_SCORE);
+  }, []);
+
   const pause = useCallback(() => {
+    const wasFinishing = isFinishingRef.current;
     isPlayingRef.current = false;
+    isFinishingRef.current = false;
+    postRollStartTimeRef.current = 0;
+    postRollBeatRateRef.current = 0;
+    postRollDurationRef.current = POST_ROLL_MIN_SECONDS;
     setIsPlaying(false);
+    setIsFinishing(false);
     countInSecondsRef.current = 0;
     countInEndTimeRef.current = 0;
     preRollVisualBeatRef.current = positionRef.current;
     setCountdown(null);
-    setVisualBeat(positionRef.current);
+    if (!wasFinishing) setVisualBeat(positionRef.current);
+    if (wasFinishing) setSongComplete(true);
     lastMetronomeBeatRef.current = null;
     stopListenVoices();
   }, [stopListenVoices]);
 
   const play = useCallback(() => {
     if (isPlayingRef.current) return;
-    if (positionRef.current >= song.durationBeats) commitPosition(0);
+    isFinishingRef.current = false;
+    setIsFinishing(false);
+    setSongComplete(false);
+    if (positionRef.current >= song.durationBeats) {
+      commitPosition(0);
+      resetScore();
+    }
     void synth().resume();
     const shouldCountIn = positionRef.current === 0;
     const beatRate = (song.bpm * settingsRef.current.tempoScale) / 60;
@@ -324,12 +362,18 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setCountdown(shouldCountIn ? PRE_ROLL_SECONDS : null);
     isPlayingRef.current = true;
     setIsPlaying(true);
-  }, [commitPosition, song.bpm, song.durationBeats, synth]);
+  }, [commitPosition, resetScore, song.bpm, song.durationBeats, synth]);
 
   const seekBeat = useCallback(
     (beat: number) => {
       const destination = clamp(beat, 0, song.durationBeats);
       stopListenVoices();
+      isFinishingRef.current = false;
+      postRollStartTimeRef.current = 0;
+      postRollBeatRateRef.current = 0;
+      postRollDurationRef.current = POST_ROLL_MIN_SECONDS;
+      setIsFinishing(false);
+      setSongComplete(false);
       countInSecondsRef.current = 0;
       countInEndTimeRef.current = 0;
       preRollVisualBeatRef.current = destination;
@@ -342,20 +386,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       resultsRef.current = reopenedResults;
       setNoteResults(reopenedResults);
       setLatestFeedback(null);
+      setFeedbackEvents([]);
       commitPosition(destination);
     },
     [commitPosition, song.durationBeats, song.notes, stopListenVoices],
   );
 
-  const resetScore = useCallback(() => {
-    resultsRef.current = new Map();
-    setNoteResults(new Map());
-    setLatestFeedback(null);
-    setScore(EMPTY_SCORE);
-  }, []);
-
   const restart = useCallback(() => {
     pause();
+    setSongComplete(false);
     commitPosition(loopRef.current.enabled ? loopRef.current.startBeat : 0);
     resetScore();
   }, [commitPosition, pause, resetScore]);
@@ -368,7 +407,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const registerResult = useCallback((result: NoteResult) => {
     resultsRef.current = new Map(resultsRef.current).set(result.id, result);
     setNoteResults(resultsRef.current);
-    setLatestFeedback(result);
+    feedbackSequenceRef.current += 1;
+    const feedbackEvent: NoteResult = {
+      ...result,
+      id: `${result.id}:feedback-${feedbackSequenceRef.current}`,
+    };
+    setLatestFeedback(feedbackEvent);
+    setFeedbackEvents((current) =>
+      [...current, feedbackEvent].slice(-FEEDBACK_HISTORY_LIMIT),
+    );
     setScore((current) => {
       if (result.grade === "miss") {
         const misses = current.misses + 1;
@@ -421,6 +468,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (
         settingsRef.current.practiceMode === "listen" ||
         !isPlayingRef.current ||
+        isFinishingRef.current ||
         countInSecondsRef.current > 0
       ) {
         return;
@@ -677,6 +725,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   useEffect(() => {
     pause();
+    setSongComplete(false);
     commitPosition(0);
     resetScore();
     setLoopState({ enabled: false, startBeat: 0, endBeat: song.durationBeats });
@@ -718,6 +767,28 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const currentSettings = settingsRef.current;
       const beatsAdvanced =
         deltaSeconds * (song.bpm * currentSettings.tempoScale) / 60;
+
+      if (isFinishingRef.current) {
+        const elapsedSeconds = Math.max(
+          0,
+          (now - postRollStartTimeRef.current) / 1000,
+        );
+        const postRollDuration = postRollDurationRef.current;
+        const boundedSeconds = Math.min(postRollDuration, elapsedSeconds);
+        setVisualBeat(
+          song.durationBeats + boundedSeconds * postRollBeatRateRef.current,
+        );
+        if (elapsedSeconds >= postRollDuration) {
+          isFinishingRef.current = false;
+          isPlayingRef.current = false;
+          setIsFinishing(false);
+          setIsPlaying(false);
+          setSongComplete(true);
+          return;
+        }
+        frame = requestAnimationFrame(animate);
+        return;
+      }
 
       if (countInSecondsRef.current > 0) {
         const remainingSeconds = Math.max(
@@ -826,8 +897,33 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           setNoteResults(freshResults);
           lastMetronomeBeatRef.current = null;
         } else {
+          if (currentSettings.practiceMode === "flow") {
+            const millisecondsPerBeat =
+              60_000 / (song.bpm * currentSettings.tempoScale);
+            for (const note of song.notes) {
+              if (resultsRef.current.has(note.id)) continue;
+              registerResult({
+                id: note.id,
+                midi: note.midi,
+                grade: "miss",
+                offsetMs:
+                  (song.durationBeats - note.startBeat) * millisecondsPerBeat,
+              });
+            }
+          }
           commitPosition(song.durationBeats);
-          pause();
+          stopListenVoices();
+          isFinishingRef.current = true;
+          postRollStartTimeRef.current = now;
+          postRollBeatRateRef.current =
+            (song.bpm * currentSettings.tempoScale) / 60;
+          postRollDurationRef.current = Math.max(
+            POST_ROLL_MIN_SECONDS,
+            POST_ROLL_CLEARANCE_BEATS / postRollBeatRateRef.current,
+          );
+          setIsFinishing(true);
+          setSongComplete(false);
+          frame = requestAnimationFrame(animate);
           return;
         }
       }
@@ -872,10 +968,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     visualBeat,
     positionSeconds,
     isPlaying,
+    isFinishing,
+    songComplete,
     countdown,
     pressedNotes,
     noteResults,
     latestFeedback,
+    feedbackEvents,
     score,
     midi,
     settings,

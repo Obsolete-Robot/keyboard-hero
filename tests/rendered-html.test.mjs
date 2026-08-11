@@ -36,17 +36,21 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /Practice mode/);
   assert.match(html, /Three-dimensional 25-key practice keyboard/);
   assert.match(html, /PLAY HERE/);
+  assert.match(html, /Stage score/);
+  assert.match(html, /Live streak/);
+  assert.match(html, /Accuracy/);
   assert.match(html, /Learn the notes\. Feel the stage\./);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
 test("ships the finished game rather than starter assets", async () => {
-  const [page, layout, packageJson, songs, stage, engine] = await Promise.all([
+  const [page, layout, packageJson, songs, stage, stageCss, engine] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../lib/songs.ts", import.meta.url), "utf8"),
     readFile(new URL("../components/KeyboardStage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/KeyboardStage.css", import.meta.url), "utf8"),
     readFile(new URL("../hooks/useKeyboardHeroCore.ts", import.meta.url), "utf8"),
   ]);
 
@@ -54,6 +58,11 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /<KeyboardStage/);
   assert.match(page, /currentBeat=\{hero\.visualBeat\}/);
   assert.match(page, /First note hits the bright bar at zero/);
+  assert.match(page, /hero\.feedbackEvents\.map/);
+  assert.match(page, /performance-results-overlay/);
+  assert.match(page, /resultsReplayRef\.current\?\.focus/);
+  assert.match(page, /Rockstar!/);
+  assert.match(page, /result\.grade === "miss"/);
   assert.match(page, /\["flow", "wait", "listen"\]/);
   assert.match(layout, /openGraph/);
   assert.match(layout, /\/og\.png/);
@@ -64,8 +73,17 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /const KEY_COUNT = 25/);
   assert.match(stage, /const HIT_Z = -0\.72/);
   assert.match(stage, /strikeLabel = "PLAY HERE"/);
+  assert.match(stage, /const KEY_LANE_COLORS = \[/);
+  assert.match(stage, /const HIT_BAR_WIDTH = KEYBOARD_WIDTH \+ 0\.42/);
+  assert.match(stage, /BoxGeometry\(HIT_BAR_WIDTH, 0\.055, 0\.055\)/);
+  assert.match(stage, /shockwave/);
+  assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
   assert.match(engine, /requestMIDIAccess/);
   assert.match(engine, /const PRE_ROLL_SECONDS = 5/);
+  assert.match(engine, /const POST_ROLL_MIN_SECONDS = 2\.5/);
+  assert.match(engine, /const POST_ROLL_CLEARANCE_BEATS = 1\.75/);
+  assert.match(engine, /feedbackEvents/);
+  assert.match(engine, /songComplete/);
   assert.match(engine, /visualBeat/);
   assert.match(engine, /tempoScale: clamp\(scale, 0\.25, 1\.25\)/);
 

@@ -107,6 +107,8 @@ interface KeyVisual extends KeyLayout {
   mesh: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
   material: THREE.MeshStandardMaterial;
   baseY: number;
+  laneColor: string;
+  laneMaterial: THREE.MeshBasicMaterial;
   landingMaterial: THREE.MeshBasicMaterial;
 }
 
@@ -122,7 +124,9 @@ interface FeedbackBurst {
   root: THREE.Group;
   points: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   velocities: Float32Array;
-  ringMaterial: THREE.MeshBasicMaterial;
+  ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  shockwave?: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  fracture?: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   light: THREE.PointLight;
   age: number;
   duration: number;
@@ -228,6 +232,39 @@ function makeKeyLayout(): KeyLayout[] {
 const KEY_LAYOUT = makeKeyLayout();
 const WHITE_KEY_COUNT = KEY_LAYOUT.filter((key) => !key.isBlack).length;
 const KEYBOARD_WIDTH = WHITE_KEY_COUNT * WHITE_KEY_WIDTH;
+const HIT_BAR_WIDTH = KEYBOARD_WIDTH + 0.42;
+const KEY_LANE_COLORS = [
+  "#35e8ff",
+  "#3da9ff",
+  "#536cff",
+  "#8255ff",
+  "#b94ff5",
+  "#e94bd2",
+  "#ff4b9a",
+  "#ff5268",
+  "#ff7047",
+  "#ffa23d",
+  "#ffd13f",
+  "#dbea48",
+  "#9bea50",
+  "#55e878",
+  "#35dda8",
+  "#31d4d2",
+  "#3abbe9",
+  "#438cf6",
+  "#665eea",
+  "#9853dd",
+  "#ca4ebc",
+  "#ef518e",
+  "#fa6260",
+  "#f58f49",
+  "#e8c84c",
+] as const;
+
+function laneColor(midi: number) {
+  const index = midi - FIRST_MIDI_NOTE;
+  return KEY_LANE_COLORS[index] ?? "#7cecff";
+}
 
 function hasMidi(
   pressed: ReadonlySet<number> | readonly number[],
@@ -240,10 +277,7 @@ function hasMidi(
 function noteColor(note: KeyboardStageNote, palette: KeyboardStagePalette) {
   if (note.color) return note.color;
   if (note.state === "missed") return palette.miss;
-  if (note.state === "hit") return palette.success;
-  if (note.hand === "left") return palette.secondary;
-  if (note.hand === "right") return palette.primary;
-  return isBlackKey(note.midi) ? palette.secondary : palette.primary;
+  return laneColor(note.midi);
 }
 
 function feedbackColor(
@@ -251,9 +285,7 @@ function feedbackColor(
   palette: KeyboardStagePalette,
 ) {
   if (feedback.kind === "miss") return palette.miss;
-  if (feedback.kind === "perfect") return palette.success;
-  if (feedback.kind === "great") return palette.primary;
-  return palette.secondary;
+  return laneColor(feedback.midi);
 }
 
 function disposeObject(root: THREE.Object3D) {
@@ -400,6 +432,24 @@ export default function KeyboardStage({
     let appliedTheme = "";
     let cameraShake = 0;
     let flashEnergy = 0;
+    let viewportWidth = 1;
+    let viewportHeight = 1;
+    let strikeProjectionDirty = true;
+    let lastStrikeX = Number.NaN;
+    let lastStrikeY = Number.NaN;
+    let lastStrikeWidth = Number.NaN;
+    let lastStrikeAngle = Number.NaN;
+    const lastProjectedCameraPosition = new THREE.Vector3(
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    );
+    const lastProjectedCameraQuaternion = new THREE.Quaternion(
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    );
     const reduceMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
@@ -471,16 +521,13 @@ export default function KeyboardStage({
 
     const laneMaterials: THREE.MeshBasicMaterial[] = [];
     KEY_LAYOUT.forEach((key, index) => {
-      const laneMaterial = addThemedMaterial(
-        new THREE.MeshBasicMaterial({
-          color: paletteRef.current.lane,
-          transparent: true,
-          opacity: key.isBlack ? 0.16 : index % 2 === 0 ? 0.085 : 0.045,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-        }),
-        "lane",
-      );
+      const laneMaterial = new THREE.MeshBasicMaterial({
+        color: laneColor(key.midi),
+        transparent: true,
+        opacity: key.isBlack ? 0.115 : index % 2 === 0 ? 0.072 : 0.052,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
       laneMaterials.push(laneMaterial);
       const lane = new THREE.Mesh(
         new THREE.PlaneGeometry(
@@ -565,16 +612,16 @@ export default function KeyboardStage({
       "primary",
     );
     const hitLine = new THREE.Mesh(
-      new THREE.BoxGeometry(KEYBOARD_WIDTH + 0.72, 0.12, 0.16),
+      new THREE.BoxGeometry(HIT_BAR_WIDTH, 0.055, 0.055),
       hitMaterial,
     );
-    hitLine.position.set(0, 0.19, HIT_Z);
+    hitLine.position.set(0, 0.17, HIT_Z);
     world.add(hitLine);
     const hitHaloMaterial = addThemedMaterial(
       new THREE.MeshBasicMaterial({
         color: paletteRef.current.primary,
         transparent: true,
-        opacity: 0.38,
+        opacity: 0.2,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         side: THREE.DoubleSide,
@@ -582,42 +629,12 @@ export default function KeyboardStage({
       "primary",
     );
     const hitHalo = new THREE.Mesh(
-      new THREE.PlaneGeometry(KEYBOARD_WIDTH + 1.02, 0.82),
+      new THREE.PlaneGeometry(KEYBOARD_WIDTH + 0.62, 0.15),
       hitHaloMaterial,
     );
     hitHalo.rotation.x = -Math.PI / 2;
-    hitHalo.position.set(0, 0.07, HIT_Z);
+    hitHalo.position.set(0, 0.105, HIT_Z);
     world.add(hitHalo);
-
-    const nearEdgeMaterial = new THREE.MeshStandardMaterial({
-      color: 0xf7fdff,
-      emissive: 0xd9faff,
-      emissiveIntensity: 5,
-      roughness: 0.1,
-      metalness: 0.08,
-    });
-    const farEdgeMaterial = addThemedMaterial(
-      new THREE.MeshStandardMaterial({
-        color: paletteRef.current.secondary,
-        emissive: paletteRef.current.secondary,
-        emissiveIntensity: 3.4,
-        roughness: 0.12,
-        metalness: 0.12,
-      }),
-      "secondary",
-    );
-    const nearEdge = new THREE.Mesh(
-      new THREE.BoxGeometry(KEYBOARD_WIDTH + 0.98, 0.065, 0.07),
-      nearEdgeMaterial,
-    );
-    nearEdge.position.set(0, 0.15, HIT_Z + 0.4);
-    world.add(nearEdge);
-    const farEdge = new THREE.Mesh(
-      new THREE.BoxGeometry(KEYBOARD_WIDTH + 0.98, 0.065, 0.07),
-      farEdgeMaterial,
-    );
-    farEdge.position.set(0, 0.15, HIT_Z - 0.4);
-    world.add(farEdge);
 
     const hitSweepMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -628,11 +645,11 @@ export default function KeyboardStage({
       side: THREE.DoubleSide,
     });
     const hitSweep = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.48, 0.76),
+      new THREE.PlaneGeometry(0.32, 0.13),
       hitSweepMaterial,
     );
     hitSweep.rotation.x = -Math.PI / 2;
-    hitSweep.position.set(-KEYBOARD_WIDTH / 2, 0.115, HIT_Z);
+    hitSweep.position.set(-KEYBOARD_WIDTH / 2, 0.125, HIT_Z);
     world.add(hitSweep);
 
     const bodyMaterial = addThemedMaterial(
@@ -689,10 +706,11 @@ export default function KeyboardStage({
     const keyVisuals: KeyVisual[] = [];
     const keyMeshes: THREE.Mesh[] = [];
 
-    KEY_LAYOUT.forEach((key) => {
+    KEY_LAYOUT.forEach((key, index) => {
+      const pitchColor = laneColor(key.midi);
       const keyMaterial = new THREE.MeshStandardMaterial({
         color: key.isBlack ? 0x10131d : 0xf1f4f7,
-        emissive: key.isBlack ? paletteRef.current.secondary : 0x9edfff,
+        emissive: pitchColor,
         emissiveIntensity: key.isBlack ? 0.08 : 0.025,
         roughness: key.isBlack ? 0.22 : 0.3,
         metalness: key.isBlack ? 0.45 : 0.08,
@@ -710,9 +728,7 @@ export default function KeyboardStage({
       keyMeshes.push(keyMesh);
 
       const landingMaterial = new THREE.MeshBasicMaterial({
-        color: key.isBlack
-          ? paletteRef.current.secondary
-          : paletteRef.current.primary,
+        color: pitchColor,
         transparent: true,
         opacity: 0,
         blending: THREE.AdditiveBlending,
@@ -739,6 +755,8 @@ export default function KeyboardStage({
         mesh: keyMesh,
         material: keyMaterial,
         baseY,
+        laneColor: pitchColor,
+        laneMaterial: laneMaterials[index],
         landingMaterial,
       });
     });
@@ -845,7 +863,7 @@ export default function KeyboardStage({
     });
 
     const ambientParticleCount = reduceMotion
-      ? 20
+      ? 0
       : Math.round(70 + clamp(intensityRef.current, 0, 2) * 45);
     const ambientPositions = new Float32Array(ambientParticleCount * 3);
     for (let index = 0; index < ambientParticleCount; index += 1) {
@@ -880,6 +898,8 @@ export default function KeyboardStage({
     const noteGeometry = new THREE.BoxGeometry(1, 1, 1);
     const noteVisuals = new Map<string | number, NoteVisual>();
     const feedbackBursts: FeedbackBurst[] = [];
+    const successFlare = new Float32Array(KEY_COUNT);
+    const missFlare = new Float32Array(KEY_COUNT);
     const pointerNotes = new Map<number, number>();
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -933,9 +953,24 @@ export default function KeyboardStage({
     const createFeedbackBurst = (event: KeyboardHitFeedback) => {
       const key = KEY_LAYOUT.find((candidate) => candidate.midi === event.midi);
       if (!key) return;
-      const eventIntensity = clamp(event.strength ?? 1, 0.25, 1.8);
       const miss = event.kind === "miss";
+      const gradeBoost =
+        event.kind === "perfect" ? 1.28 : event.kind === "great" ? 1.08 : 0.86;
+      const eventIntensity = clamp(
+        (event.strength ?? 1) * (miss ? 0.75 : gradeBoost),
+        0.25,
+        1.8,
+      );
+      const keyIndex = event.midi - FIRST_MIDI_NOTE;
       const color = feedbackColor(event, paletteRef.current);
+      if (miss) {
+        missFlare[keyIndex] = Math.max(missFlare[keyIndex], eventIntensity);
+      } else {
+        successFlare[keyIndex] = Math.max(
+          successFlare[keyIndex],
+          eventIntensity,
+        );
+      }
       const rootGroup = new THREE.Group();
       rootGroup.position.set(key.x, 0.46, HIT_Z);
       world.add(rootGroup);
@@ -943,38 +978,102 @@ export default function KeyboardStage({
       const ringMaterial = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.92,
+        opacity: miss ? 0.62 : 0.98,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.16, 0.24, 28),
+        new THREE.RingGeometry(0.13, miss ? 0.2 : 0.25, 32),
         ringMaterial,
       );
       ring.rotation.x = -Math.PI / 2;
       rootGroup.add(ring);
 
+      let shockwave:
+        | THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>
+        | undefined;
+      if (!miss && !reduceMotion) {
+        const shockwaveMaterial = new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.72,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        shockwave = new THREE.Mesh(
+          new THREE.RingGeometry(0.22, 0.3, 40),
+          shockwaveMaterial,
+        );
+        shockwave.rotation.x = -Math.PI / 2;
+        shockwave.position.y = -0.04;
+        rootGroup.add(shockwave);
+      }
+
+      let fracture:
+        | THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>
+        | undefined;
+      if (miss && !reduceMotion) {
+        const fracturePositions: number[] = [];
+        for (let index = 0; index < 11; index += 1) {
+          const angle = (index / 11) * Math.PI * 2 + Math.random() * 0.25;
+          const innerRadius = 0.08 + Math.random() * 0.08;
+          const outerRadius = 0.34 + Math.random() * 0.42;
+          fracturePositions.push(
+            Math.cos(angle) * innerRadius,
+            Math.random() * 0.08,
+            Math.sin(angle) * innerRadius,
+            Math.cos(angle) * outerRadius,
+            Math.random() * 0.16 - 0.04,
+            Math.sin(angle) * outerRadius,
+          );
+        }
+        const fractureGeometry = new THREE.BufferGeometry();
+        fractureGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(fracturePositions, 3),
+        );
+        const fractureMaterial = new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.95,
+          blending: THREE.AdditiveBlending,
+        });
+        fracture = new THREE.LineSegments(
+          fractureGeometry,
+          fractureMaterial,
+        );
+        rootGroup.add(fracture);
+      }
+
       const particleCount = reduceMotion
-        ? 6
-        : Math.round((miss ? 12 : 24) * eventIntensity);
+        ? 0
+        : Math.round((miss ? 15 : 48) * eventIntensity);
       const positions = new Float32Array(particleCount * 3);
       const velocities = new Float32Array(particleCount * 3);
       for (let index = 0; index < particleCount; index += 1) {
         const angle = Math.random() * Math.PI * 2;
-        const horizontal = 0.8 + Math.random() * 1.8;
+        const horizontal = miss
+          ? 0.25 + Math.random() * 0.95
+          : 1.2 + Math.random() * 3.4;
+        positions[index * 3] = (Math.random() - 0.5) * 0.08;
+        positions[index * 3 + 1] = Math.random() * 0.08;
+        positions[index * 3 + 2] = (Math.random() - 0.5) * 0.08;
         velocities[index * 3] = Math.cos(angle) * horizontal;
-        velocities[index * 3 + 1] = 1.1 + Math.random() * 2.7;
+        velocities[index * 3 + 1] = miss
+          ? 0.15 + Math.random() * 0.85
+          : 1.5 + Math.random() * 4.2;
         velocities[index * 3 + 2] = Math.sin(angle) * horizontal;
       }
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
       const material = new THREE.PointsMaterial({
         color,
-        size: miss ? 0.09 : 0.13,
+        size: miss ? 0.17 : 0.105,
         transparent: true,
-        opacity: 1,
-        blending: THREE.AdditiveBlending,
+        opacity: miss ? 0.58 : 1,
+        blending: miss ? THREE.NormalBlending : THREE.AdditiveBlending,
         depthWrite: false,
       });
       const points = new THREE.Points(geometry, material);
@@ -982,8 +1081,8 @@ export default function KeyboardStage({
 
       const burstLight = new THREE.PointLight(
         color,
-        miss ? 6 : 13 * eventIntensity,
-        5,
+        miss ? 4 : 25 * eventIntensity,
+        miss ? 3.5 : 6.5,
         2,
       );
       burstLight.position.y = 0.5;
@@ -993,17 +1092,19 @@ export default function KeyboardStage({
         root: rootGroup,
         points,
         velocities,
-        ringMaterial,
+        ring,
+        shockwave,
+        fracture,
         light: burstLight,
         age: 0,
-        duration: miss ? 0.65 : 0.9,
+        duration: reduceMotion ? 0.38 : miss ? 0.56 : 1.16,
         miss,
       });
       cameraShake = Math.max(
         cameraShake,
-        (miss ? 0.04 : 0.085) * eventIntensity,
+        (miss ? 0.035 : 0.11) * eventIntensity,
       );
-      flashEnergy = Math.max(flashEnergy, miss ? 0.35 : eventIntensity);
+      flashEnergy = Math.max(flashEnergy, miss ? 0.22 : eventIntensity * 1.3);
     };
 
     const drawDisplay = () => {
@@ -1064,12 +1165,9 @@ export default function KeyboardStage({
         material.needsUpdate = true;
       });
       keyVisuals.forEach((key) => {
-        key.material.emissive.set(
-          key.isBlack ? activePalette.secondary : activePalette.whiteKeyGlow,
-        );
-        key.landingMaterial.color.set(
-          key.isBlack ? activePalette.secondary : activePalette.primary,
-        );
+        key.material.emissive.set(key.laneColor);
+        key.landingMaterial.color.set(key.laneColor);
+        key.laneMaterial.color.set(key.laneColor);
       });
       padMaterials.forEach((material, index) => {
         const color = index % 2
@@ -1085,6 +1183,9 @@ export default function KeyboardStage({
       if (disposed) return;
       const width = Math.max(1, root.clientWidth);
       const height = Math.max(1, root.clientHeight);
+      viewportWidth = width;
+      viewportHeight = height;
+      strikeProjectionDirty = true;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8));
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
@@ -1098,9 +1199,19 @@ export default function KeyboardStage({
     const updateStrikeZoneProjection = () => {
       const strikeZone = strikeZoneRef.current;
       if (!strikeZone) return;
-      const width = Math.max(1, root.clientWidth);
-      const height = Math.max(1, root.clientHeight);
-      const halfWidth = (KEYBOARD_WIDTH + 1.02) / 2;
+      const cameraPositionChanged =
+        camera.position.distanceToSquared(lastProjectedCameraPosition) > 1e-5;
+      const cameraRotationChanged =
+        1 - Math.abs(camera.quaternion.dot(lastProjectedCameraQuaternion)) >
+        1e-7;
+      if (
+        !strikeProjectionDirty &&
+        !cameraPositionChanged &&
+        !cameraRotationChanged
+      ) {
+        return;
+      }
+      const halfWidth = HIT_BAR_WIDTH / 2;
 
       world.updateWorldMatrix(true, false);
       camera.updateMatrixWorld();
@@ -1111,22 +1222,34 @@ export default function KeyboardStage({
       world.localToWorld(strikeLeft).project(camera);
       world.localToWorld(strikeRight).project(camera);
 
-      const centerX = (strikeCenter.x * 0.5 + 0.5) * width;
-      const centerY = (-strikeCenter.y * 0.5 + 0.5) * height;
-      const leftX = (strikeLeft.x * 0.5 + 0.5) * width;
-      const leftY = (-strikeLeft.y * 0.5 + 0.5) * height;
-      const rightX = (strikeRight.x * 0.5 + 0.5) * width;
-      const rightY = (-strikeRight.y * 0.5 + 0.5) * height;
+      const centerX = (strikeCenter.x * 0.5 + 0.5) * viewportWidth;
+      const centerY = (-strikeCenter.y * 0.5 + 0.5) * viewportHeight;
+      const leftX = (strikeLeft.x * 0.5 + 0.5) * viewportWidth;
+      const leftY = (-strikeLeft.y * 0.5 + 0.5) * viewportHeight;
+      const rightX = (strikeRight.x * 0.5 + 0.5) * viewportWidth;
+      const rightY = (-strikeRight.y * 0.5 + 0.5) * viewportHeight;
       const projectedWidth = Math.hypot(rightX - leftX, rightY - leftY);
       const angle = Math.atan2(rightY - leftY, rightX - leftX);
 
-      strikeZone.style.setProperty("--kh-strike-x", `${centerX}px`);
-      strikeZone.style.setProperty("--kh-strike-y", `${centerY}px`);
-      strikeZone.style.setProperty(
-        "--kh-strike-width",
-        `${Math.min(Math.max(1, width - 18), Math.max(150, projectedWidth))}px`,
-      );
-      strikeZone.style.setProperty("--kh-strike-angle", `${angle}rad`);
+      if (
+        Math.abs(centerX - lastStrikeX) > 0.2 ||
+        Math.abs(centerY - lastStrikeY) > 0.2 ||
+        Math.abs(angle - lastStrikeAngle) > 0.0005
+      ) {
+        strikeZone.style.transform =
+          `translate3d(${centerX}px, ${centerY}px, 0) ` +
+          `translate(-50%, -50%) rotate(${angle}rad)`;
+        lastStrikeX = centerX;
+        lastStrikeY = centerY;
+        lastStrikeAngle = angle;
+      }
+      if (Math.abs(projectedWidth - lastStrikeWidth) > 0.2) {
+        strikeZone.style.width = `${projectedWidth}px`;
+        lastStrikeWidth = projectedWidth;
+      }
+      lastProjectedCameraPosition.copy(camera.position);
+      lastProjectedCameraQuaternion.copy(camera.quaternion);
+      strikeProjectionDirty = false;
     };
 
     const hitTest = (event: PointerEvent) => {
@@ -1211,6 +1334,11 @@ export default function KeyboardStage({
 
       applyTheme();
 
+      while (pendingFeedbackRef.current.length) {
+        const event = pendingFeedbackRef.current.shift();
+        if (event) createFeedbackBurst(event);
+      }
+
       beatLines.forEach((line, index) => {
         const deltaBeat = (1 - beatFraction) % 1 + index;
         line.position.z = HIT_Z - (deltaBeat / visibleBeats) * TRAVEL_DISTANCE;
@@ -1219,8 +1347,12 @@ export default function KeyboardStage({
       });
 
       const liveIds = new Set<string | number>();
+      const sustainedMidi = new Set<number>();
       notesRef.current.forEach((note) => {
-        if (note.midi < FIRST_MIDI_NOTE || note.midi >= FIRST_MIDI_NOTE + KEY_COUNT) {
+        if (
+          note.midi < FIRST_MIDI_NOTE ||
+          note.midi >= FIRST_MIDI_NOTE + KEY_COUNT
+        ) {
           return;
         }
         liveIds.add(note.id);
@@ -1246,12 +1378,23 @@ export default function KeyboardStage({
           HIT_Z - ((note.startBeat - beat) / visibleBeats) * TRAVEL_DISTANCE;
         const velocity = clamp(note.velocity ?? 0.82, 0.1, 1);
         const color = noteColor(note, paletteRef.current);
+        const keyIndex = note.midi - FIRST_MIDI_NOTE;
+        const successEnergy = successFlare[keyIndex];
+        const pressedNow =
+          hasMidi(pressedRef.current, note.midi) ||
+          pressedByPointer.has(note.midi);
         const nearbyPress =
-          (hasMidi(pressedRef.current, note.midi) ||
-            pressedByPointer.has(note.midi)) &&
-          Math.abs(note.startBeat - beat) < 0.35;
-        const hitBoost = note.state === "hit" || nearbyPress ? 1.65 : 1;
+          pressedNow && Math.abs(note.startBeat - beat) < 0.35;
+        const sustaining =
+          durationBeats >= 0.45 &&
+          beat >= note.startBeat - 0.08 &&
+          beat <= tailBeat + 0.08 &&
+          (pressedNow || note.state === "active");
+        if (sustaining) sustainedMidi.add(note.midi);
+        const hitBoost = nearbyPress || note.state === "active" ? 1.55 : 1;
         const missed = note.state === "missed";
+        const renderedColor = missed ? paletteRef.current.miss : color;
+        const motionFlare = reduceMotion ? 0 : successEnergy;
 
         visual.group.position.set(
           key.x,
@@ -1260,18 +1403,31 @@ export default function KeyboardStage({
         );
         visual.body.scale.set(
           noteWidth,
-          (0.12 + velocity * 0.11) * hitBoost,
+          (0.12 + velocity * 0.11) *
+            hitBoost *
+            (1 + motionFlare * 0.3 + (sustaining ? 0.12 : 0)),
           length,
         );
-        visual.glow.scale.set(noteWidth * 1.45, 0.36, length + 0.22);
-        visual.bodyMaterial.color.set(color);
-        visual.bodyMaterial.emissive.set(color);
+        visual.glow.scale.set(
+          noteWidth * (1.45 + motionFlare * 0.7),
+          0.36 + motionFlare * 0.16,
+          length + 0.22 + (sustaining ? 0.32 : 0),
+        );
+        visual.bodyMaterial.color.set(renderedColor);
+        visual.bodyMaterial.emissive.set(renderedColor);
         visual.bodyMaterial.emissiveIntensity =
-          (missed ? 0.8 : 2.25 + velocity * 1.1) * hitBoost;
-        visual.bodyMaterial.opacity = missed ? 0.5 : 0.94;
-        visual.glowMaterial.color.set(color);
-        visual.glowMaterial.opacity =
-          (missed ? 0.07 : 0.14 + activeIntensity * 0.05) * hitBoost;
+          (missed ? 0.8 : 2.25 + velocity * 1.1) * hitBoost +
+          successEnergy * 9 +
+          (sustaining ? 3.2 : 0);
+        visual.bodyMaterial.opacity = missed ? 0.46 : 0.96;
+        visual.glowMaterial.color.set(renderedColor);
+        visual.glowMaterial.opacity = clamp(
+          (missed ? 0.06 : 0.14 + activeIntensity * 0.05) * hitBoost +
+            successEnergy * 0.48 +
+            (sustaining ? 0.24 : 0),
+          0.04,
+          0.92,
+        );
       });
 
       noteVisuals.forEach((_, id) => {
@@ -1281,24 +1437,61 @@ export default function KeyboardStage({
       keyVisuals.forEach((key, index) => {
         const active =
           hasMidi(pressedRef.current, key.midi) || pressedByPointer.has(key.midi);
+        const hitEnergy = successFlare[index];
+        const missedEnergy = missFlare[index];
+        const sustaining = sustainedMidi.has(key.midi);
         const targetY = key.baseY - (active ? 0.055 : 0);
         key.mesh.position.y += (targetY - key.mesh.position.y) * 0.32;
+        key.mesh.scale.y +=
+          (1 +
+            (reduceMotion ? 0 : hitEnergy * 0.18) +
+            (sustaining ? 0.055 : 0) -
+            key.mesh.scale.y) *
+          0.28;
+        key.material.emissive.set(
+          missedEnergy > 0.08 ? paletteRef.current.miss : key.laneColor,
+        );
         key.material.emissiveIntensity +=
-          ((active ? 2.8 + activeIntensity : key.isBlack ? 0.08 : 0.025) -
+          ((active ? 3.1 + activeIntensity : key.isBlack ? 0.08 : 0.025) +
+            hitEnergy * 10 +
+            missedEnergy * 2.8 +
+            (sustaining ? 3.4 : 0) -
             key.material.emissiveIntensity) *
-          0.24;
+          0.3;
+        key.landingMaterial.color.set(
+          missedEnergy > 0.08 ? paletteRef.current.miss : key.laneColor,
+        );
         key.landingMaterial.opacity +=
-          ((active ? 0.8 : 0) - key.landingMaterial.opacity) * 0.24;
-        if (active) {
+          (Math.max(
+            active ? 0.72 : 0,
+            hitEnergy * 0.96,
+            missedEnergy * 0.62,
+            sustaining ? 0.48 : 0,
+          ) -
+            key.landingMaterial.opacity) *
+          0.3;
+        key.laneMaterial.color.set(
+          missedEnergy > 0.08 ? paletteRef.current.miss : key.laneColor,
+        );
+        const baseLaneOpacity = key.isBlack
+          ? 0.115
+          : index % 2 === 0
+            ? 0.072
+            : 0.052;
+        key.laneMaterial.opacity +=
+          (baseLaneOpacity +
+            hitEnergy * 0.42 +
+            missedEnergy * 0.25 +
+            (sustaining ? 0.12 : 0) -
+            key.laneMaterial.opacity) *
+          0.28;
+        if (active || hitEnergy > 0.08 || sustaining) {
           key.landingMaterial.opacity *=
             0.86 + Math.sin(now * 0.012 + index) * 0.14;
         }
+        successFlare[index] *= Math.pow(0.028, deltaSeconds);
+        missFlare[index] *= Math.pow(0.006, deltaSeconds);
       });
-
-      while (pendingFeedbackRef.current.length) {
-        const event = pendingFeedbackRef.current.shift();
-        if (event) createFeedbackBurst(event);
-      }
 
       for (let index = feedbackBursts.length - 1; index >= 0; index -= 1) {
         const burst = feedbackBursts[index];
@@ -1308,25 +1501,43 @@ export default function KeyboardStage({
           .array as Float32Array;
         for (let particle = 0; particle < positions.length / 3; particle += 1) {
           const offset = particle * 3;
-          burst.velocities[offset + 1] -= 4.6 * deltaSeconds;
+          burst.velocities[offset + 1] -=
+            (burst.miss ? 0.75 : 5.2) * deltaSeconds;
           positions[offset] += burst.velocities[offset] * deltaSeconds;
           positions[offset + 1] += burst.velocities[offset + 1] * deltaSeconds;
           positions[offset + 2] += burst.velocities[offset + 2] * deltaSeconds;
         }
         burst.points.geometry.attributes.position.needsUpdate = true;
-        burst.points.material.opacity = Math.max(0, 1 - progress * progress);
-        burst.ringMaterial.opacity = Math.max(0, 0.9 * (1 - progress));
-        const ringScale = 1 + progress * (burst.miss ? 2 : 4.2);
-        burst.root.children[0].scale.setScalar(ringScale);
-        burst.light.intensity *= 0.87;
+        burst.points.material.opacity = Math.max(
+          0,
+          (burst.miss ? 0.58 : 1) * (1 - progress * progress),
+        );
+        burst.ring.material.opacity = Math.max(
+          0,
+          (burst.miss ? 0.58 : 0.96) * (1 - progress),
+        );
+        burst.ring.scale.setScalar(
+          reduceMotion ? 1 : 1 + progress * (burst.miss ? 1.7 : 4.6),
+        );
+        if (burst.shockwave && !reduceMotion) {
+          burst.shockwave.scale.setScalar(1 + progress * 7.2);
+          burst.shockwave.material.opacity = Math.max(
+            0,
+            0.72 * (1 - progress) * (1 - progress),
+          );
+        }
+        if (burst.fracture && !reduceMotion) {
+          burst.fracture.scale.setScalar(1 + progress * 0.38);
+          burst.fracture.material.opacity = Math.max(
+            0,
+            0.95 * (1 - progress * 1.35),
+          );
+        }
+        burst.light.intensity *= Math.pow(0.002, deltaSeconds);
 
         if (progress >= 1) {
           world.remove(burst.root);
-          burst.points.geometry.dispose();
-          burst.points.material.dispose();
-          const ring = burst.root.children[0] as THREE.Mesh;
-          ring.geometry.dispose();
-          burst.ringMaterial.dispose();
+          disposeObject(burst.root);
           burst.light.dispose();
           feedbackBursts.splice(index, 1);
         }
@@ -1351,24 +1562,21 @@ export default function KeyboardStage({
 
       const beatPulse = Math.pow(1 - beatFraction, 5);
       hitMaterial.emissiveIntensity =
-        5.2 + beatPulse * (3.8 + activeIntensity * 1.4);
+        3.8 + beatPulse * (1.8 + activeIntensity * 0.55);
       hitHaloMaterial.opacity =
-        0.3 + beatPulse * 0.26 + Math.min(0.34, flashEnergy * 0.2);
-      hitHalo.scale.y = 1 + beatPulse * 0.42;
-      hitLine.scale.z = 1 + beatPulse * 0.6;
-      nearEdgeMaterial.emissiveIntensity = 4.2 + beatPulse * 4.5;
-      farEdgeMaterial.emissiveIntensity =
-        2.8 + beatPulse * (3 + activeIntensity);
+        0.13 + beatPulse * 0.11 + Math.min(0.12, flashEnergy * 0.05);
+      hitHalo.scale.y = 1 + beatPulse * 0.16;
+      hitLine.scale.z = 1 + beatPulse * 0.18;
       if (reduceMotion) {
         hitSweep.position.x = 0;
-        hitSweepMaterial.opacity = 0.16;
+        hitSweepMaterial.opacity = 0.1;
       } else {
         const sweepProgress = (now * 0.00034) % 1;
         hitSweep.position.x =
           -KEYBOARD_WIDTH / 2 - 0.4 +
           sweepProgress * (KEYBOARD_WIDTH + 0.8);
         hitSweepMaterial.opacity =
-          0.25 + Math.sin(sweepProgress * Math.PI) * 0.34;
+          0.12 + Math.sin(sweepProgress * Math.PI) * 0.2;
       }
       primaryLight.intensity = 9 + activeIntensity * 4 + flashEnergy * 11;
       secondaryLight.intensity = 8 + activeIntensity * 3;
@@ -1377,7 +1585,7 @@ export default function KeyboardStage({
       if (!reduceMotion) {
         camera.position.x = Math.sin(now * 0.00042) * 0.08 * activeIntensity;
         camera.position.y =
-          (root.clientWidth < 620 ? 9.5 : 8.9) +
+          (viewportWidth < 620 ? 9.5 : 8.9) +
           Math.sin(now * 0.00031) * 0.035 * activeIntensity;
         if (cameraShake > 0.001) {
           camera.position.x += (Math.random() - 0.5) * cameraShake;

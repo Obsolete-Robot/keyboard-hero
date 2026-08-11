@@ -26,7 +26,11 @@ import KeyboardStage, {
   type KeyboardHitFeedback,
   type KeyboardStageNote,
 } from "@/components/KeyboardStage";
-import { useKeyboardHeroCore } from "@/hooks/useKeyboardHeroCore";
+import {
+  useKeyboardHeroCore,
+  type KeyboardHeroScore,
+  type NoteResult,
+} from "@/hooks/useKeyboardHeroCore";
 import {
   SONGS,
   getSongDurationSeconds,
@@ -80,6 +84,139 @@ function modeCopy(mode: "flow" | "wait" | "listen") {
     title: "Stay loose, look ahead",
     body: "Keep your eyes one beat above the hit line. A relaxed miss is easier to fix than a tense recovery.",
     tone: "",
+  };
+}
+
+type CelebrationTone = "perfect" | "great" | "good" | "miss" | "rockstar";
+
+interface CelebrationCopy {
+  eyebrow: string;
+  headline: string;
+  detail: string;
+  tone: CelebrationTone;
+}
+
+function performanceCelebration(
+  feedback: NoteResult | null,
+  combo: number,
+): CelebrationCopy | null {
+  if (!feedback) return null;
+  if (feedback.grade === "miss") {
+    return {
+      eyebrow: "Miss - reset and rise",
+      headline: "Shake it off!",
+      detail: "Find the next lane. One note never defines the run.",
+      tone: "miss",
+    };
+  }
+  if (combo >= 25) {
+    return {
+      eyebrow: `${combo} note streak`,
+      headline: "Rockstar!",
+      detail: "The whole stage is yours. Keep breathing and ride it home.",
+      tone: "rockstar",
+    };
+  }
+  if (combo >= 15) {
+    return {
+      eyebrow: `${combo} note streak`,
+      headline: "On fire!",
+      detail: "Your hands know the path now. Stay loose.",
+      tone: "rockstar",
+    };
+  }
+  if (combo >= 8) {
+    return {
+      eyebrow: `${combo} note streak`,
+      headline: "Locked in!",
+      detail: "That timing is turning into instinct.",
+      tone: feedback.grade === "perfect" ? "perfect" : "great",
+    };
+  }
+  if (combo >= 4) {
+    return {
+      eyebrow: `${combo} note streak`,
+      headline: "Nice!",
+      detail: "The groove is building. Look one note ahead.",
+      tone: feedback.grade === "perfect" ? "perfect" : "great",
+    };
+  }
+  if (feedback.grade === "perfect") {
+    return {
+      eyebrow: "Perfect timing",
+      headline: "Dead center!",
+      detail: "Exactly on the bright bar. Remember that feel.",
+      tone: "perfect",
+    };
+  }
+  if (feedback.grade === "great") {
+    return {
+      eyebrow: feedback.offsetMs < 0 ? "Great - a touch early" : "Great - a touch late",
+      headline: "So close!",
+      detail: "Keep the same motion and settle into the pulse.",
+      tone: "great",
+    };
+  }
+  return {
+    eyebrow: feedback.offsetMs < 0 ? "Good - just early" : "Good - just late",
+    headline: "Keep rolling!",
+    detail: "You landed it. Smooth beats rushed every time.",
+    tone: "good",
+  };
+}
+
+function performanceRating(
+  score: KeyboardHeroScore,
+  mode: "flow" | "wait" | "listen",
+) {
+  if (score.hits + score.misses === 0) {
+    return {
+      grade: "—",
+      title: mode === "listen" ? "Demo complete" : "Ready for your run",
+      message:
+        mode === "listen"
+          ? "You heard the full arrangement. Switch to Flow or Wait when you are ready to earn your rating."
+          : "No notes were judged this time. Start from the top when you are ready to earn your rating.",
+      tone: "practice",
+    };
+  }
+  if (score.accuracy >= 97 && score.misses === 0) {
+    return {
+      grade: "S",
+      title: "Legendary run",
+      message: "Every light hit at once. Take the encore - you earned it.",
+      tone: "legendary",
+    };
+  }
+  if (score.accuracy >= 92) {
+    return {
+      grade: "A",
+      title: "Rockstar performance",
+      message: "Precision, momentum, and real musical control. Run it back even faster.",
+      tone: "rockstar",
+    };
+  }
+  if (score.accuracy >= 84) {
+    return {
+      grade: "B",
+      title: "Locked in",
+      message: "A confident run with a strong pulse. Polish the misses and this song is yours.",
+      tone: "locked",
+    };
+  }
+  if (score.accuracy >= 72) {
+    return {
+      grade: "C",
+      title: "Rising star",
+      message: "The shape is there. Slow it down, loop the rough section, and build the streak.",
+      tone: "rising",
+    };
+  }
+  return {
+    grade: "R",
+    title: "First run complete",
+    message: "Finishing is the first win. Drop the tempo and turn every miss into a target.",
+    tone: "practice",
   };
 }
 
@@ -185,7 +322,11 @@ export default function Home() {
     [songId],
   );
   const hero = useKeyboardHeroCore(song);
+  const isFinishing = hero.isFinishing;
+  const songComplete = hero.songComplete;
   const positionBeatRef = useRef(hero.positionBeat);
+  const resultsReplayRef = useRef<HTMLButtonElement>(null);
+  const resultsReturnFocusRef = useRef<HTMLElement | null>(null);
   const togglePlayFromKey = hero.togglePlay;
   const rewindFromKey = hero.rewindBeats;
   const seekFromKey = hero.seekBeat;
@@ -193,6 +334,26 @@ export default function Home() {
   useEffect(() => {
     positionBeatRef.current = hero.positionBeat;
   }, [hero.positionBeat]);
+
+  useEffect(() => {
+    if (!songComplete) return;
+    const activeElement = document.activeElement;
+    resultsReturnFocusRef.current =
+      activeElement instanceof HTMLElement && activeElement !== document.body
+        ? activeElement
+        : null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      resultsReplayRef.current?.focus({ preventScroll: true });
+    });
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      const returnTarget = resultsReturnFocusRef.current;
+      resultsReturnFocusRef.current = null;
+      if (returnTarget?.isConnected) {
+        returnTarget.focus({ preventScroll: true });
+      }
+    };
+  }, [songComplete]);
 
   useEffect(() => {
     const handleTransportKeys = (event: globalThis.KeyboardEvent) => {
@@ -232,29 +393,69 @@ export default function Home() {
   const progress = Math.min(100, (hero.positionBeat / song.durationBeats) * 100);
   const loopStart = Math.min(100, (hero.loop.startBeat / song.durationBeats) * 100);
   const loopEnd = Math.min(100, (hero.loop.endBeat / song.durationBeats) * 100);
+  const celebration = performanceCelebration(
+    hero.latestFeedback,
+    hero.score.combo,
+  );
+  const feedbackKey = hero.latestFeedback
+    ? `${hero.latestFeedback.id}-${hero.score.hits}-${hero.score.misses}`
+    : "ready";
+  const scoreDelta = hero.latestFeedback
+    ? hero.latestFeedback.grade === "perfect"
+      ? 1000 + Math.min(500, hero.score.combo * 10)
+      : hero.latestFeedback.grade === "great"
+        ? 700 + Math.min(500, hero.score.combo * 10)
+        : hero.latestFeedback.grade === "good"
+          ? 450 + Math.min(500, hero.score.combo * 10)
+          : 0
+    : 0;
+  const streakTier =
+    hero.score.combo >= 25
+      ? "rockstar"
+      : hero.score.combo >= 15
+        ? "fire"
+        : hero.score.combo >= 8
+          ? "locked"
+          : hero.score.combo >= 4
+            ? "building"
+            : "base";
+  const streakProgress = Math.min(100, (hero.score.combo / 25) * 100);
+  const performanceResult = performanceRating(
+    hero.score,
+    hero.settings.practiceMode,
+  );
 
   const stageNotes = useMemo<KeyboardStageNote[]>(
     () =>
-      song.notes.map((note) => ({
-        id: note.id,
-        midi: note.midi,
-        startBeat: note.startBeat,
-        durationBeats: note.durationBeats,
-        velocity: (note.velocity ?? 94) / 127,
-        hand: note.hand === "both" ? undefined : note.hand,
-      })),
-    [song],
+      song.notes.map((note) => {
+        const result = hero.noteResults.get(note.id);
+        return {
+          id: note.id,
+          midi: note.midi,
+          startBeat: note.startBeat,
+          durationBeats: note.durationBeats,
+          velocity: (note.velocity ?? 94) / 127,
+          hand: note.hand === "both" ? undefined : note.hand,
+          state: result
+            ? result.grade === "miss"
+              ? "missed"
+              : "hit"
+            : "upcoming",
+        };
+      }),
+    [hero.noteResults, song],
   );
 
-  const stageFeedback = useMemo<KeyboardHitFeedback | null>(() => {
-    if (!hero.latestFeedback) return null;
-    return {
-      id: hero.latestFeedback.id,
-      midi: hero.latestFeedback.midi,
-      kind: hero.latestFeedback.grade,
-      strength: Math.max(0.45, 1 - Math.abs(hero.latestFeedback.offsetMs) / 280),
-    };
-  }, [hero.latestFeedback]);
+  const stageFeedback = useMemo<readonly KeyboardHitFeedback[]>(
+    () =>
+      hero.feedbackEvents.map((event) => ({
+        id: event.id,
+        midi: event.midi,
+        kind: event.grade,
+        strength: Math.max(0.45, 1 - Math.abs(event.offsetMs) / 280),
+      })),
+    [hero.feedbackEvents],
+  );
 
   const selectSong = useCallback(
     (nextSong: Song) => {
@@ -279,19 +480,10 @@ export default function Home() {
     hero.seekBeat(nextBeat);
   };
 
-  const judgementLabel = hero.latestFeedback
-    ? hero.latestFeedback.grade === "perfect"
-      ? "Perfect"
-      : hero.latestFeedback.grade === "great"
-        ? hero.latestFeedback.offsetMs < 0
-          ? "Great · early"
-          : "Great · late"
-        : hero.latestFeedback.grade === "good"
-          ? hero.latestFeedback.offsetMs < 0
-            ? "Good · early"
-            : "Good · late"
-          : "Miss · reset"
-    : null;
+  const replaySong = () => {
+    hero.restart();
+    hero.play();
+  };
 
   return (
     <main className="app-shell">
@@ -335,7 +527,13 @@ export default function Home() {
 
       <div className="main-grid">
         <section className="play-column" aria-label="Keyboard Hero stage">
-          <div className="stage-wrap">
+          <div
+            className={`stage-wrap${
+              hero.countdown !== null && hero.countdown > 0
+                ? " is-counting-in"
+                : ""
+            }${isFinishing ? " is-finishing" : ""}`}
+          >
             <KeyboardStage
               ariaLabel="Three-dimensional 25-key practice keyboard and falling note highway"
               currentBeat={hero.visualBeat}
@@ -360,30 +558,95 @@ export default function Home() {
                   <strong>{Math.round(song.bpm * hero.settings.tempoScale)}</strong>
                   <span>Live BPM</span>
                 </div>
-                <div className="stage-metric">
-                  <strong>{hero.score.accuracy.toFixed(0)}%</strong>
-                  <span>Accuracy</span>
-                </div>
-                <div className="stage-metric">
-                  <strong>{hero.score.points.toLocaleString()}</strong>
-                  <span>Score</span>
-                </div>
               </div>
             </div>
 
-            {hero.score.combo >= 5 && (
-              <div className="combo-burst" key={hero.score.combo}>
-                <strong>{hero.score.combo}×</strong>
-                <span>{hero.score.combo >= 20 ? "On fire" : "Streak"}</span>
+            <section
+              className={`performance-hud tier-${streakTier}`}
+              aria-label={`Live performance: ${hero.score.points} points, ${hero.score.combo} note streak, ${hero.score.accuracy.toFixed(0)} percent accuracy`}
+            >
+              <div className="performance-card performance-score">
+                <span className="performance-label">Stage score</span>
+                <div className="score-readout">
+                  <strong
+                    className="score-value"
+                    key={`score-${hero.score.points}`}
+                  >
+                    {hero.score.points.toLocaleString()}
+                  </strong>
+                  {scoreDelta > 0 && (
+                    <span className="score-delta" key={`delta-${feedbackKey}`}>
+                      +{scoreDelta.toLocaleString()}
+                    </span>
+                  )}
+                </div>
+                <span className="performance-subline">
+                  {hero.score.hits} notes landed
+                </span>
               </div>
-            )}
 
-            {judgementLabel && (
-              <div
-                className={`judgement-toast ${hero.latestFeedback?.grade ?? ""}`}
-                key={hero.latestFeedback?.id}
-              >
-                {judgementLabel}
+              <div className="performance-card performance-streak">
+                <div className="streak-stat">
+                  <span className="performance-label">Live streak</span>
+                  <strong className="combo-value" key={`combo-${hero.score.combo}`}>
+                    {hero.score.combo}<small>×</small>
+                  </strong>
+                  <span className="performance-subline">
+                    Best {hero.score.bestCombo}×
+                  </span>
+                </div>
+                <div className="accuracy-stat">
+                  <span className="performance-label">Accuracy</span>
+                  <strong>{hero.score.accuracy.toFixed(0)}%</strong>
+                  <span
+                    className="accuracy-meter"
+                    role="progressbar"
+                    aria-label="Performance accuracy"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(hero.score.accuracy)}
+                  >
+                    <i style={{ width: `${Math.min(100, hero.score.accuracy)}%` }} />
+                  </span>
+                </div>
+                <span className="streak-charge" aria-hidden="true">
+                  <i style={{ width: `${streakProgress}%` }} />
+                </span>
+              </div>
+            </section>
+
+            {celebration &&
+              !songComplete &&
+              (hero.countdown === null || hero.countdown <= 0) && (
+                <div
+                  aria-hidden="true"
+                  className={`stage-encouragement tone-${celebration.tone}`}
+                  key={feedbackKey}
+                >
+                  <span className="encouragement-kicker">{celebration.eyebrow}</span>
+                  <strong>{celebration.headline}</strong>
+                  <span className="encouragement-detail">{celebration.detail}</span>
+                  {scoreDelta > 0 && (
+                    <b className="encouragement-points">+{scoreDelta.toLocaleString()}</b>
+                  )}
+                </div>
+              )}
+
+            <p
+              className="sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {celebration
+                ? `${celebration.headline} ${celebration.detail} Score ${hero.score.points}. Streak ${hero.score.combo}. Accuracy ${hero.score.accuracy.toFixed(0)} percent.`
+                : "Stage ready."}
+            </p>
+
+            {isFinishing && !songComplete && (
+              <div className="finale-status" role="status" aria-live="polite">
+                <span>Final chord</span>
+                <strong>Let it ring...</strong>
               </div>
             )}
 
@@ -392,6 +655,68 @@ export default function Home() {
                 <span className="count-in-kicker">Get ready</span>
                 <strong key={hero.countdown}>{hero.countdown}</strong>
                 <span className="count-in-cue">First note hits the bright bar at zero</span>
+              </div>
+            )}
+
+            {songComplete && (
+              <div className="performance-results-overlay">
+                <section
+                  className={`performance-results-card result-${performanceResult.tone}`}
+                  role="dialog"
+                  aria-modal="false"
+                  aria-live="polite"
+                  aria-labelledby="performance-results-title"
+                >
+                  <span className="results-kicker">Performance complete</span>
+                  <div className="results-hero">
+                    <div className="results-grade" aria-label={`Rating ${performanceResult.grade}`}>
+                      {performanceResult.grade}
+                    </div>
+                    <div>
+                      <h2 id="performance-results-title">{performanceResult.title}</h2>
+                      <p>{performanceResult.message}</p>
+                    </div>
+                  </div>
+
+                  <div className="results-score">
+                    <span>Final score</span>
+                    <strong>{hero.score.points.toLocaleString()}</strong>
+                  </div>
+
+                  <div className="results-grid" aria-label="Performance statistics">
+                    <div>
+                      <strong>{hero.score.accuracy.toFixed(0)}%</strong>
+                      <span>Accuracy</span>
+                    </div>
+                    <div>
+                      <strong>{hero.score.hits}</strong>
+                      <span>Notes landed</span>
+                    </div>
+                    <div>
+                      <strong>{hero.score.misses}</strong>
+                      <span>To revisit</span>
+                    </div>
+                    <div>
+                      <strong>{hero.score.bestCombo}×</strong>
+                      <span>Best streak</span>
+                    </div>
+                  </div>
+
+                  <div className="results-actions">
+                    <button
+                      ref={resultsReplayRef}
+                      className="results-replay"
+                      onClick={replaySong}
+                    >
+                      <Play size={15} fill="currentColor" aria-hidden="true" />
+                      Play it again
+                    </button>
+                    <button className="results-practice" onClick={hero.restart}>
+                      <RotateCcw size={15} aria-hidden="true" />
+                      Back to practice
+                    </button>
+                  </div>
+                </section>
               </div>
             )}
           </div>
