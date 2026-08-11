@@ -424,6 +424,30 @@ export default function Home() {
     hero.score,
     hero.settings.practiceMode,
   );
+  const hasMIDIActivity =
+    hero.midi.connectedName !== null &&
+    typeof hero.midi.lastNote === "number" &&
+    hero.midi.lastMessageInRange !== null;
+  const activeMIDIChannel = hero.midi.detectedChannel ?? hero.midi.channel;
+  const midiDeviceHint = !hero.midi.connectedName
+    ? "Z–M / Q–I maps C3–C5"
+    : !hasMIDIActivity
+      ? "Performance port connected · play a C3–C5 key"
+      : hero.midi.lastMessageInRange
+        ? `${midiToNoteName(hero.midi.lastNote!)} · ${
+            activeMIDIChannel === null
+              ? "Channel detecting"
+              : `Channel ${activeMIDIChannel + 1}`
+          } · signal received`
+        : `${midiToNoteName(hero.midi.lastNote!)} outside C3–C5 · shift the MPK octave`;
+  const midiChannelSupport =
+    hero.midi.channel !== null
+      ? `Listening on channel ${hero.midi.channel + 1}`
+      : hero.midi.detectedChannel !== null
+        ? `Auto detected channel ${hero.midi.detectedChannel + 1}`
+        : hero.midi.connectedName
+          ? "Auto detects from your first C3–C5 key"
+          : "Auto detects after a MIDI input connects";
 
   const stageNotes = useMemo<KeyboardStageNote[]>(
     () =>
@@ -515,8 +539,18 @@ export default function Home() {
             <span className="device-name">
               {hero.midi.connectedName ?? "Computer keys ready"}
             </span>
-            <span className="device-hint">
-              {hero.midi.connectedName ? "Left key: C3 · signal live" : "Z–M / Q–I maps C3–C5"}
+            <span
+              aria-atomic="true"
+              aria-live="polite"
+              className={`device-hint${
+                hasMIDIActivity && hero.midi.lastMessageInRange === false
+                  ? " octave-warning"
+                  : hasMIDIActivity
+                    ? " signal-received"
+                    : ""
+              }`}
+            >
+              {midiDeviceHint}
             </span>
           </div>
           <button className="connect-button" onClick={hero.connectMIDI}>
@@ -931,19 +965,58 @@ export default function Home() {
               />
             </div>
             <div className="setting-row">
-              <span><Usb size={12} aria-hidden="true" /> MIDI input</span>
+              <label htmlFor="midi-input-select">
+                <Usb size={12} aria-hidden="true" /> MIDI input
+              </label>
               <select
-                aria-label="MIDI input"
                 className="mini-select"
-                disabled={!hero.midi.inputs.length}
-                onChange={(event) => hero.selectMIDIInput(event.target.value)}
+                disabled={!hero.midi.inputs.some((input) => input.connected)}
+                id="midi-input-select"
+                onChange={(event) => hero.selectMIDIInput(event.target.value || null)}
                 value={hero.midi.selectedInputId ?? ""}
               >
-                {!hero.midi.inputs.length && <option value="">Not connected</option>}
+                <option value="">Not connected</option>
                 {hero.midi.inputs.map((input) => (
-                  <option key={input.id} value={input.id}>{input.name}</option>
+                  <option disabled={!input.connected} key={input.id} value={input.id}>
+                    {input.name}
+                    {input.connected ? "" : " — disconnected"}
+                  </option>
                 ))}
               </select>
+            </div>
+            <div className="setting-row midi-channel-row">
+              <label htmlFor="midi-channel-select">
+                <CircleGauge size={12} aria-hidden="true" /> MIDI channel
+              </label>
+              <div className="midi-channel-control">
+                <select
+                  aria-describedby="midi-channel-support"
+                  className="mini-select midi-channel-select"
+                  id="midi-channel-select"
+                  onChange={(event) =>
+                    hero.setMIDIChannel(
+                      event.target.value === "auto"
+                        ? null
+                        : Number(event.target.value),
+                    )
+                  }
+                  value={hero.midi.channel === null ? "auto" : hero.midi.channel}
+                >
+                  <option value="auto">Auto</option>
+                  {Array.from({ length: 16 }, (_, channel) => (
+                    <option key={channel} value={channel}>
+                      {channel + 1}
+                    </option>
+                  ))}
+                </select>
+                <small
+                  aria-live="polite"
+                  className="midi-channel-support"
+                  id="midi-channel-support"
+                >
+                  {midiChannelSupport}
+                </small>
+              </div>
             </div>
             <div className="setting-row">
               <span><CircleGauge size={12} aria-hidden="true" /> Current target</span>

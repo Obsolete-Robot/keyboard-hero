@@ -33,6 +33,7 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /KEYBOARD HERO/);
   assert.match(html, /First Five Launch/);
   assert.match(html, /Connect MIDI/);
+  assert.match(html, /MIDI channel/);
   assert.match(html, /Practice mode/);
   assert.match(html, /Three-dimensional 25-key practice keyboard/);
   assert.match(html, /PLAY HERE/);
@@ -61,6 +62,9 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /hero\.feedbackEvents\.map/);
   assert.match(page, /performance-results-overlay/);
   assert.match(page, /resultsReplayRef\.current\?\.focus/);
+  assert.match(page, /Performance port connected/);
+  assert.match(page, /outside C3–C5/);
+  assert.match(page, /hero\.setMIDIChannel/);
   assert.match(page, /Rockstar!/);
   assert.match(page, /result\.grade === "miss"/);
   assert.match(page, /\["flow", "wait", "listen"\]/);
@@ -79,6 +83,10 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /shockwave/);
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
   assert.match(engine, /requestMIDIAccess/);
+  assert.match(engine, /name\?\.trim\(\)\.toLowerCase\(\) === "mpk mini iv"/);
+  assert.match(engine, /detectedChannel/);
+  assert.match(engine, /note >= MIDI_MIN && note <= MIDI_MAX/);
+  assert.match(engine, /midi:\$\{input\.id\}:ch\$\{channel\}/);
   assert.match(engine, /const PRE_ROLL_SECONDS = 5/);
   assert.match(engine, /const POST_ROLL_MIN_SECONDS = 2\.5/);
   assert.match(engine, /const POST_ROLL_CLEARANCE_BEATS = 1\.75/);

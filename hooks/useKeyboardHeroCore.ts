@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import { KeyboardSynth } from "@/lib/audio";
-import type { Song, SongNote } from "@/lib/songs";
+import { MIDI_MAX, MIDI_MIN, type Song, type SongNote } from "@/lib/songs";
 
 export type PracticeMode = "flow" | "wait" | "listen";
 export type NoteGrade = "perfect" | "great" | "good" | "miss";
@@ -49,6 +49,13 @@ export interface KeyboardHeroMIDIState {
   inputs: MIDIInputInfo[];
   selectedInputId: string | null;
   connectedName: string | null;
+  /** Manual MIDI channel, zero-based. Null enables automatic channel detection. */
+  channel: number | null;
+  /** Zero-based channel learned from the first in-range note-on in Auto mode. */
+  detectedChannel: number | null;
+  lastNote: number | null;
+  lastVelocity: number;
+  lastMessageInRange: boolean | null;
   error: string | null;
 }
 
@@ -101,6 +108,7 @@ export interface KeyboardHeroCore {
   toggleLoop: () => void;
   connectMIDI: () => Promise<void>;
   selectMIDIInput: (inputId: string | null) => void;
+  setMIDIChannel: (channel: number | null) => void;
   noteOn: (midi: number, velocity?: number, source?: string) => void;
   noteOff: (midi: number, source?: string) => void;
   resetScore: () => void;
@@ -258,6 +266,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     inputs: [],
     selectedInputId: null,
     connectedName: null,
+    channel: null,
+    detectedChannel: null,
+    lastNote: null,
+    lastVelocity: 0,
+    lastMessageInRange: null,
     error: null,
   }));
 
@@ -265,6 +278,8 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const midiAccessRef = useRef<MIDIAccessLike | null>(null);
   const midiInputRef = useRef<MIDIInputLike | null>(null);
   const selectedMIDIIdRef = useRef<string | null>(null);
+  const midiChannelRef = useRef<number | null>(null);
+  const detectedMIDIChannelRef = useRef<number | null>(null);
   const noteOnRef = useRef<(midi: number, velocity?: number, source?: string) => void>(
     () => undefined,
   );
@@ -601,14 +616,75 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     }
   }, [seekBeat]);
 
+  const resetMIDIActivity = useCallback(() => {
+    detectedMIDIChannelRef.current = null;
+    setMIDI((current) => ({
+      ...current,
+      detectedChannel: null,
+      lastNote: null,
+      lastVelocity: 0,
+      lastMessageInRange: null,
+    }));
+  }, []);
+
+  const setMIDIChannel = useCallback(
+    (channel: number | null) => {
+      if (
+        channel !== null &&
+        (!Number.isInteger(channel) || channel < 0 || channel > 15)
+      ) {
+        return;
+      }
+      releaseHeldSources("midi:");
+      midiChannelRef.current = channel;
+      detectedMIDIChannelRef.current = null;
+      setMIDI((current) => ({
+        ...current,
+        channel,
+        detectedChannel: null,
+        lastNote: null,
+        lastVelocity: 0,
+        lastMessageInRange: null,
+      }));
+    },
+    [releaseHeldSources],
+  );
+
   const bindMIDIInput = useCallback((input: MIDIInputLike) => {
     input.onmidimessage = (event) => {
       const [status = 0, note = 0, velocity = 0] = event.data;
       const command = status & 0xf0;
-      const source = `midi:${input.id}`;
-      if (command === 0x90 && velocity > 0) {
+      const isNoteOn = command === 0x90 && velocity > 0;
+      const isNoteOff = command === 0x80 || (command === 0x90 && velocity === 0);
+      if (!isNoteOn && !isNoteOff) return;
+
+      const channel = status & 0x0f;
+      const inRange = note >= MIDI_MIN && note <= MIDI_MAX;
+      setMIDI((current) => ({
+        ...current,
+        lastNote: note,
+        lastVelocity: velocity,
+        lastMessageInRange: inRange,
+      }));
+      if (!inRange) return;
+
+      const manualChannel = midiChannelRef.current;
+      if (manualChannel !== null && channel !== manualChannel) return;
+      if (manualChannel === null) {
+        const detectedChannel = detectedMIDIChannelRef.current;
+        if (detectedChannel === null) {
+          if (!isNoteOn) return;
+          detectedMIDIChannelRef.current = channel;
+          setMIDI((current) => ({ ...current, detectedChannel: channel }));
+        } else if (channel !== detectedChannel) {
+          return;
+        }
+      }
+
+      const source = `midi:${input.id}:ch${channel}`;
+      if (isNoteOn) {
         noteOnRef.current(note, velocity, source);
-      } else if (command === 0x80 || (command === 0x90 && velocity === 0)) {
+      } else {
         noteOffRef.current(note, source);
       }
     };
@@ -628,9 +704,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       (input) => input.id === selectedMIDIIdRef.current && input.state === "connected",
     );
     const previous = midiInputRef.current;
-    if (previous && previous !== selected) {
-      previous.onmidimessage = null;
-      releaseHeldSources(`midi:${previous.id}:`);
+    if (previous !== (selected ?? null)) {
+      if (previous) previous.onmidimessage = null;
+      releaseHeldSources("midi:");
+      resetMIDIActivity();
     }
     midiInputRef.current = selected ?? null;
     if (selected) bindMIDIInput(selected);
@@ -640,16 +717,18 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       selectedInputId: selected?.id ?? null,
       connectedName: selected?.name || null,
     }));
-  }, [bindMIDIInput, releaseHeldSources]);
+  }, [bindMIDIInput, releaseHeldSources, resetMIDIActivity]);
 
   const selectMIDIInput = useCallback(
     (inputId: string | null) => {
+      const inputChanged = selectedMIDIIdRef.current !== inputId;
       const previous = midiInputRef.current;
       if (previous) {
         previous.onmidimessage = null;
-        if (previous.id !== inputId) {
-          releaseHeldSources(`midi:${previous.id}:`);
-        }
+      }
+      if (inputChanged) {
+        releaseHeldSources("midi:");
+        resetMIDIActivity();
       }
       selectedMIDIIdRef.current = inputId;
       const input = Array.from(midiAccessRef.current?.inputs.values() ?? []).find(
@@ -664,7 +743,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         error: inputId && !input ? "That MIDI input is no longer connected." : null,
       }));
     },
-    [bindMIDIInput, releaseHeldSources],
+    [bindMIDIInput, releaseHeldSources, resetMIDIActivity],
   );
 
   const connectMIDI = useCallback(async () => {
@@ -690,10 +769,22 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         error: null,
       }));
       refreshMIDIInputs();
-      const first = Array.from(access.inputs.values()).find(
+      const connectedInputs = Array.from(access.inputs.values()).filter(
         (input) => input.state === "connected",
       );
-      if (first) selectMIDIInput(first.id);
+      const retainedInput = connectedInputs.find(
+        (input) => input.id === selectedMIDIIdRef.current,
+      );
+      const exactMPKInput = connectedInputs.find(
+        (input) => input.name?.trim().toLowerCase() === "mpk mini iv",
+      );
+      const aliasedMPKInput = connectedInputs.find((input) => {
+        const name = input.name?.toLowerCase() ?? "";
+        return name.includes("mpk mini iv") || name.includes("mpk mini 4");
+      });
+      const preferredInput =
+        retainedInput ?? exactMPKInput ?? aliasedMPKInput ?? connectedInputs[0];
+      if (preferredInput) selectMIDIInput(preferredInput.id);
     } catch (error) {
       setMIDI((current) => ({
         ...current,
@@ -994,6 +1085,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     toggleLoop,
     connectMIDI,
     selectMIDIInput,
+    setMIDIChannel,
     noteOn,
     noteOff,
     resetScore,
