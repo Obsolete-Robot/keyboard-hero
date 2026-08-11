@@ -265,6 +265,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const countInSecondsRef = useRef(0);
   const countInEndTimeRef = useRef(0);
   const countInBeatRateRef = useRef(0);
+  const preRollVisualBeatRef = useRef(0);
   const heldSourcesRef = useRef<Map<number, Set<string>>>(new Map());
   const listenVoicesRef = useRef<Set<string>>(new Set());
   const lastMetronomeBeatRef = useRef<number | null>(null);
@@ -297,6 +298,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setIsPlaying(false);
     countInSecondsRef.current = 0;
     countInEndTimeRef.current = 0;
+    preRollVisualBeatRef.current = positionRef.current;
     setCountdown(null);
     setVisualBeat(positionRef.current);
     lastMetronomeBeatRef.current = null;
@@ -314,11 +316,12 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       ? performance.now() + PRE_ROLL_SECONDS * 1000
       : 0;
     countInBeatRateRef.current = beatRate;
-    setVisualBeat(shouldCountIn ? -PRE_ROLL_SECONDS * beatRate : positionRef.current);
+    const preRollStartBeat = shouldCountIn
+      ? -PRE_ROLL_SECONDS * beatRate
+      : positionRef.current;
+    preRollVisualBeatRef.current = preRollStartBeat;
+    setVisualBeat(preRollStartBeat);
     setCountdown(shouldCountIn ? PRE_ROLL_SECONDS : null);
-    if (shouldCountIn && settingsRef.current.metronomeEnabled) {
-      synth().playMetronome(true);
-    }
     isPlayingRef.current = true;
     setIsPlaying(true);
   }, [commitPosition, song.bpm, song.durationBeats, synth]);
@@ -329,6 +332,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       stopListenVoices();
       countInSecondsRef.current = 0;
       countInEndTimeRef.current = 0;
+      preRollVisualBeatRef.current = destination;
       setCountdown(null);
       lastMetronomeBeatRef.current = null;
       const reopenedResults = new Map(resultsRef.current);
@@ -478,6 +482,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   noteOffRef.current = noteOff;
 
   const setTempoScale = useCallback((scale: number) => {
+    if (countInSecondsRef.current > 0) return;
     setSettings((current) => ({
       ...current,
       tempoScale: clamp(scale, 0.25, 1.25),
@@ -715,25 +720,30 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         deltaSeconds * (song.bpm * currentSettings.tempoScale) / 60;
 
       if (countInSecondsRef.current > 0) {
-        const beforeDisplay = Math.ceil(countInSecondsRef.current);
         const remainingSeconds = Math.max(
           0,
           (countInEndTimeRef.current - now) / 1000,
         );
         countInSecondsRef.current = remainingSeconds;
         const afterDisplay = Math.ceil(remainingSeconds);
-        if (
-          remainingSeconds > 0 &&
-          afterDisplay !== beforeDisplay &&
-          currentSettings.metronomeEnabled
-        ) {
-          synth().playMetronome(false);
-        }
-        setVisualBeat(
+        const nextVisualBeat =
           remainingSeconds > 0
             ? -remainingSeconds * countInBeatRateRef.current
-            : 0,
-        );
+            : 0;
+        const previousVisualBeat = preRollVisualBeatRef.current;
+        const crossedBeat = Math.floor(nextVisualBeat + 0.000_001);
+        if (
+          currentSettings.metronomeEnabled &&
+          crossedBeat <= 0 &&
+          crossedBeat > Math.floor(previousVisualBeat + 0.000_001)
+        ) {
+          synth().playMetronome(
+            crossedBeat % song.timeSignature[0] === 0,
+          );
+          if (crossedBeat === 0) lastMetronomeBeatRef.current = 0;
+        }
+        preRollVisualBeatRef.current = nextVisualBeat;
+        setVisualBeat(nextVisualBeat);
         setCountdown(remainingSeconds > 0 ? afterDisplay : null);
         frame = requestAnimationFrame(animate);
         return;
