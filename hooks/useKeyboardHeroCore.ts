@@ -64,7 +64,16 @@ export interface KeyboardHeroSettings {
   practiceMode: PracticeMode;
   metronomeEnabled: boolean;
   synthEnabled: boolean;
+  backingBandEnabled: boolean;
+  backingBandMix: number;
+  backingBandIntensity: number;
   latencyMs: number;
+}
+
+export interface KeyboardHeroBackingBandState {
+  active: boolean;
+  /** Normalized live pulse for visual meters. */
+  energy: number;
 }
 
 export interface KeyboardHeroLoop {
@@ -91,6 +100,7 @@ export interface KeyboardHeroCore {
   feedbackEvents: NoteResult[];
   score: KeyboardHeroScore;
   midi: KeyboardHeroMIDIState;
+  backingBand: KeyboardHeroBackingBandState;
   settings: KeyboardHeroSettings;
   loop: KeyboardHeroLoop;
   togglePlay: () => void;
@@ -103,6 +113,9 @@ export interface KeyboardHeroCore {
   setPracticeMode: (mode: PracticeMode) => void;
   setMetronomeEnabled: (enabled: boolean) => void;
   setSynthEnabled: (enabled: boolean) => void;
+  setBackingBandEnabled: (enabled: boolean) => void;
+  setBackingBandMix: (mix: number) => void;
+  setBackingBandIntensity: (intensity: number) => void;
   setLatencyMs: (latencyMs: number) => void;
   setLoop: (startBeat: number, endBeat: number, enabled?: boolean) => void;
   toggleLoop: () => void;
@@ -145,6 +158,9 @@ const DEFAULT_SETTINGS: KeyboardHeroSettings = {
   practiceMode: "flow",
   metronomeEnabled: true,
   synthEnabled: true,
+  backingBandEnabled: true,
+  backingBandMix: 0.58,
+  backingBandIntensity: 0.65,
   latencyMs: 0,
 };
 const EMPTY_SCORE: KeyboardHeroScore = {
@@ -218,6 +234,21 @@ function readSettings(): KeyboardHeroSettings {
       practiceMode,
       metronomeEnabled: parsed.metronomeEnabled ?? true,
       synthEnabled: parsed.synthEnabled ?? true,
+      backingBandEnabled: parsed.backingBandEnabled ?? true,
+      backingBandMix: clamp(
+        Number.isFinite(Number(parsed.backingBandMix))
+          ? Number(parsed.backingBandMix)
+          : DEFAULT_SETTINGS.backingBandMix,
+        0,
+        1,
+      ),
+      backingBandIntensity: clamp(
+        Number.isFinite(Number(parsed.backingBandIntensity))
+          ? Number(parsed.backingBandIntensity)
+          : DEFAULT_SETTINGS.backingBandIntensity,
+        0,
+        1,
+      ),
       latencyMs: clamp(Number(parsed.latencyMs) || 0, -250, 250),
     };
   } catch {
@@ -239,7 +270,7 @@ function resultFor(note: SongNote, offsetMs: number): NoteResult {
 }
 
 export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
-  const [settings, setSettings] = useState<KeyboardHeroSettings>(readSettings);
+  const [settings, setSettings] = useState<KeyboardHeroSettings>(DEFAULT_SETTINGS);
   const [positionBeat, setPositionBeatState] = useState(0);
   const [visualBeat, setVisualBeat] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -253,15 +284,19 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const [latestFeedback, setLatestFeedback] = useState<NoteResult | null>(null);
   const [feedbackEvents, setFeedbackEvents] = useState<NoteResult[]>([]);
   const [score, setScore] = useState<KeyboardHeroScore>(EMPTY_SCORE);
+  const [backingBand, setBackingBand] = useState<KeyboardHeroBackingBandState>({
+    active: false,
+    energy: 0,
+  });
   const [loop, setLoopState] = useState<KeyboardHeroLoop>({
     enabled: false,
     startBeat: 0,
     endBeat: song.durationBeats,
   });
   const [midi, setMIDI] = useState<KeyboardHeroMIDIState>(() => ({
-    supported:
-      typeof navigator !== "undefined" &&
-      typeof (navigator as MIDIEnabledNavigator).requestMIDIAccess === "function",
+    // Keep the server and first browser render identical. Capability detection
+    // runs after hydration so unsupported-browser guidance never mismatches.
+    supported: true,
     permission: "idle",
     inputs: [],
     selectedInputId: null,
@@ -287,6 +322,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const positionRef = useRef(0);
   const resultsRef = useRef(noteResults);
   const settingsRef = useRef(settings);
+  const settingsReadyRef = useRef(false);
   const loopRef = useRef(loop);
   const isPlayingRef = useRef(false);
   const isFinishingRef = useRef(false);
@@ -301,9 +337,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const listenVoicesRef = useRef<Set<string>>(new Set());
   const lastMetronomeBeatRef = useRef<number | null>(null);
   const feedbackSequenceRef = useRef(0);
+  const backingBandActiveRef = useRef(false);
 
   const synth = useCallback((): KeyboardSynth => {
-    synthRef.current ??= new KeyboardSynth();
+    if (!synthRef.current) {
+      synthRef.current = new KeyboardSynth();
+      synthRef.current.setAccompanimentVolume(
+        settingsRef.current.backingBandMix,
+      );
+    }
     return synthRef.current;
   }, []);
 
@@ -324,6 +366,75 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     }
     listenVoicesRef.current.clear();
   }, []);
+
+  const setBackingBandFrame = useCallback((active: boolean, energy = 0) => {
+    backingBandActiveRef.current = active;
+    const normalizedEnergy = active ? clamp(energy, 0, 1) : 0;
+    setBackingBand((current) =>
+      current.active === active &&
+      Math.abs(current.energy - normalizedEnergy) < 0.005
+        ? current
+        : { active, energy: normalizedEnergy },
+    );
+  }, []);
+
+  const stopBackingBand = useCallback(
+    (immediate = true) => {
+      synthRef.current?.stopAccompaniment(immediate);
+      setBackingBandFrame(false);
+    },
+    [setBackingBandFrame],
+  );
+
+  const syncBackingBand = useCallback(
+    (
+      beat: number,
+      currentSettings: KeyboardHeroSettings,
+      currentLoop: KeyboardHeroLoop = loopRef.current,
+    ) => {
+      const normalizedBeat = Math.max(0, beat);
+      if (
+        !currentSettings.backingBandEnabled ||
+        currentSettings.backingBandMix <= 0
+      ) {
+        if (backingBandActiveRef.current) {
+          synthRef.current?.stopAccompaniment(true);
+          setBackingBandFrame(false);
+        }
+        return;
+      }
+
+      const instrument = synth();
+      if (instrument.state !== "running") {
+        setBackingBandFrame(false);
+        return;
+      }
+
+      const accompanimentRunning = instrument.syncAccompaniment({
+        song,
+        beat: normalizedBeat,
+        tempoScale: currentSettings.tempoScale,
+        loop: currentLoop,
+        intensity: currentSettings.backingBandIntensity,
+      });
+      if (!accompanimentRunning) {
+        setBackingBandFrame(false);
+        return;
+      }
+
+      const beatFloor = Math.floor(normalizedBeat);
+      const stepIndex = Math.floor(normalizedBeat * 2 + 0.000_001);
+      const subdivisionPhase = normalizedBeat * 2 - stepIndex;
+      const pulse = (1 - subdivisionPhase) ** 3;
+      const downbeat = beatFloor % song.timeSignature[0] === 0;
+      const energy = Math.sqrt(currentSettings.backingBandMix) *
+        (0.28 + currentSettings.backingBandIntensity * 0.62) *
+        (0.55 + pulse * 0.45) *
+        (downbeat ? 1.08 : 1);
+      setBackingBandFrame(true, clamp(energy, 0, 1));
+    },
+    [setBackingBandFrame, song, synth],
+  );
 
   const resetScore = useCallback(() => {
     resultsRef.current = new Map();
@@ -350,7 +461,8 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     if (wasFinishing) setSongComplete(true);
     lastMetronomeBeatRef.current = null;
     stopListenVoices();
-  }, [stopListenVoices]);
+    stopBackingBand(true);
+  }, [stopBackingBand, stopListenVoices]);
 
   const play = useCallback(() => {
     if (isPlayingRef.current) return;
@@ -361,6 +473,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       commitPosition(0);
       resetScore();
     }
+    stopBackingBand(true);
     void synth().resume();
     const shouldCountIn = positionRef.current === 0;
     const beatRate = (song.bpm * settingsRef.current.tempoScale) / 60;
@@ -377,12 +490,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setCountdown(shouldCountIn ? PRE_ROLL_SECONDS : null);
     isPlayingRef.current = true;
     setIsPlaying(true);
-  }, [commitPosition, resetScore, song.bpm, song.durationBeats, synth]);
+  }, [commitPosition, resetScore, song.bpm, song.durationBeats, stopBackingBand, synth]);
 
   const seekBeat = useCallback(
     (beat: number) => {
       const destination = clamp(beat, 0, song.durationBeats);
       stopListenVoices();
+      stopBackingBand(true);
       isFinishingRef.current = false;
       postRollStartTimeRef.current = 0;
       postRollBeatRateRef.current = 0;
@@ -404,7 +518,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       setFeedbackEvents([]);
       commitPosition(destination);
     },
-    [commitPosition, song.durationBeats, song.notes, stopListenVoices],
+    [
+      commitPosition,
+      song.durationBeats,
+      song.notes,
+      stopBackingBand,
+      stopListenVoices,
+    ],
   );
 
   const restart = useCallback(() => {
@@ -508,6 +628,23 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         registerResult(
           resultFor(candidate, (judgedBeat - candidate.startBeat) * millisecondsPerBeat),
         );
+        if (
+          settingsRef.current.practiceMode === "wait" &&
+          settingsRef.current.backingBandEnabled &&
+          !backingBandActiveRef.current
+        ) {
+          const stillBlocked = song.notes.some(
+            (note) =>
+              !resultsRef.current.has(note.id) &&
+              Math.abs(note.startBeat - positionRef.current) < 0.000_001,
+          );
+          if (!stillBlocked) {
+            syncBackingBand(
+              positionRef.current,
+              settingsRef.current,
+            );
+          }
+        }
       } else {
         registerResult({
           id: `extra-${sourceId}-${performance.now().toFixed(1)}`,
@@ -517,7 +654,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         });
       }
     },
-    [registerResult, song.bpm, song.notes, synth],
+    [registerResult, song.bpm, song.notes, syncBackingBand, synth],
   );
 
   const noteOff = useCallback((midiNote: number, source = "manual") => {
@@ -581,6 +718,37 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     if (!synthEnabled) synthRef.current?.allNotesOff(true);
   }, []);
 
+  const setBackingBandEnabled = useCallback(
+    (backingBandEnabled: boolean) => {
+      setSettings((current) => {
+        const next = { ...current, backingBandEnabled };
+        settingsRef.current = next;
+        return next;
+      });
+      if (!backingBandEnabled) stopBackingBand(true);
+    },
+    [stopBackingBand],
+  );
+
+  const setBackingBandMix = useCallback((mix: number) => {
+    const backingBandMix = clamp(mix, 0, 1);
+    setSettings((current) => {
+      const next = { ...current, backingBandMix };
+      settingsRef.current = next;
+      return next;
+    });
+    synthRef.current?.setAccompanimentVolume(backingBandMix);
+  }, []);
+
+  const setBackingBandIntensity = useCallback((intensity: number) => {
+    const backingBandIntensity = clamp(intensity, 0, 1);
+    setSettings((current) => {
+      const next = { ...current, backingBandIntensity };
+      settingsRef.current = next;
+      return next;
+    });
+  }, []);
+
   const setLatencyMs = useCallback((latencyMs: number) => {
     setSettings((current) => ({
       ...current,
@@ -593,18 +761,20 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const start = clamp(startBeat, 0, Math.max(0, song.durationBeats - 0.25));
       const end = clamp(endBeat, start + 0.25, song.durationBeats);
       const nextLoop = { enabled, startBeat: start, endBeat: end };
+      stopBackingBand(true);
       loopRef.current = nextLoop;
       setLoopState(nextLoop);
       if (enabled && (positionRef.current < start || positionRef.current >= end)) {
         seekBeat(start);
       }
     },
-    [seekBeat, song.durationBeats],
+    [seekBeat, song.durationBeats, stopBackingBand],
   );
 
   const toggleLoop = useCallback(() => {
     const current = loopRef.current;
     const nextLoop = { ...current, enabled: !current.enabled };
+    stopBackingBand(true);
     loopRef.current = nextLoop;
     setLoopState(nextLoop);
     if (
@@ -614,7 +784,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     ) {
       seekBeat(nextLoop.startBeat);
     }
-  }, [seekBeat]);
+  }, [seekBeat, stopBackingBand]);
 
   const resetMIDIActivity = useCallback(() => {
     detectedMIDIChannelRef.current = null;
@@ -798,7 +968,22 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   }, [refreshMIDIInputs, selectMIDIInput]);
 
   useEffect(() => {
+    setSettings(readSettings());
+    setMIDI((current) => ({
+      ...current,
+      supported:
+        typeof (navigator as MIDIEnabledNavigator).requestMIDIAccess ===
+        "function",
+    }));
+  }, []);
+
+  useEffect(() => {
     settingsRef.current = settings;
+    synthRef.current?.setAccompanimentVolume(settings.backingBandMix);
+    if (!settingsReadyRef.current) {
+      settingsReadyRef.current = true;
+      return;
+    }
     try {
       window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch {
@@ -907,6 +1092,20 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         preRollVisualBeatRef.current = nextVisualBeat;
         setVisualBeat(nextVisualBeat);
         setCountdown(remainingSeconds > 0 ? afterDisplay : null);
+        if (remainingSeconds === 0) {
+          const loopAtStart = loopRef.current;
+          const waitIsBlockedAtZero =
+            currentSettings.practiceMode === "wait" &&
+            song.notes.some(
+              (note) =>
+                !resultsRef.current.has(note.id) &&
+                Math.abs(note.startBeat) < 0.000_001 &&
+                (!loopAtStart.enabled || note.startBeat < loopAtStart.endBeat),
+            );
+          if (!waitIsBlockedAtZero) {
+            syncBackingBand(0, currentSettings);
+          }
+        }
         frame = requestAnimationFrame(animate);
         return;
       }
@@ -915,6 +1114,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       let nextBeat = oldBeat + beatsAdvanced;
       const activeLoop = loopRef.current;
       const loopEnd = activeLoop.enabled ? activeLoop.endBeat : song.durationBeats;
+      let waitBlocked = false;
 
       if (currentSettings.practiceMode === "wait") {
         const blockingBeat = song.notes
@@ -930,7 +1130,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
               minimum === null ? note.startBeat : Math.min(minimum, note.startBeat),
             null,
           );
-        if (blockingBeat !== null) nextBeat = Math.min(nextBeat, blockingBeat);
+        if (blockingBeat !== null) {
+          nextBeat = Math.min(nextBeat, blockingBeat);
+          waitBlocked = Math.abs(nextBeat - oldBeat) < 0.000_001;
+        }
       }
 
       if (currentSettings.practiceMode === "flow") {
@@ -978,6 +1181,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         if (activeLoop.enabled) {
           nextBeat = activeLoop.startBeat + (nextBeat - loopEnd);
           stopListenVoices();
+          stopBackingBand(true);
           const freshResults = new Map(resultsRef.current);
           for (const note of song.notes) {
             if (note.startBeat >= activeLoop.startBeat && note.startBeat < activeLoop.endBeat) {
@@ -1004,6 +1208,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           }
           commitPosition(song.durationBeats);
           stopListenVoices();
+          stopBackingBand(false);
           isFinishingRef.current = true;
           postRollStartTimeRef.current = now;
           postRollBeatRateRef.current =
@@ -1019,6 +1224,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         }
       }
 
+      if (waitBlocked) {
+        if (backingBandActiveRef.current) stopBackingBand(true);
+      } else {
+        syncBackingBand(nextBeat, currentSettings);
+      }
       commitPosition(nextBeat);
       frame = requestAnimationFrame(animate);
     };
@@ -1031,7 +1241,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     pause,
     registerResult,
     song,
+    stopBackingBand,
     stopListenVoices,
+    syncBackingBand,
     synth,
   ]);
 
@@ -1068,6 +1280,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     feedbackEvents,
     score,
     midi,
+    backingBand,
     settings,
     loop,
     togglePlay,
@@ -1080,6 +1293,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setPracticeMode,
     setMetronomeEnabled,
     setSynthEnabled,
+    setBackingBandEnabled,
+    setBackingBandMix,
+    setBackingBandIntensity,
     setLatencyMs,
     setLoop,
     toggleLoop,

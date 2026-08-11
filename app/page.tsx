@@ -9,6 +9,7 @@ import {
   type ChangeEvent,
 } from "react";
 import {
+  AudioLines,
   ChevronDown,
   CircleGauge,
   Headphones,
@@ -17,10 +18,12 @@ import {
   Repeat2,
   Rewind,
   RotateCcw,
+  SlidersHorizontal,
   Sparkles,
   Usb,
   Volume2,
   X,
+  Zap,
 } from "lucide-react";
 import KeyboardStage, {
   type KeyboardHitFeedback,
@@ -448,6 +451,24 @@ export default function Home() {
         : hero.midi.connectedName
           ? "Auto detects from your first C3–C5 key"
           : "Auto detects after a MIDI input connects";
+  const backingBandStatus = !hero.settings.backingBandEnabled
+    ? "Band off"
+    : hero.backingBand.active
+      ? "Band live"
+      : "Band ready";
+  const backingBandEnergy = Math.round(
+    Math.max(0, Math.min(1, hero.backingBand.energy)) * 100,
+  );
+  const backingBandIntensityLabel =
+    hero.settings.backingBandIntensity >= 0.8
+      ? "Full send"
+      : hero.settings.backingBandIntensity >= 0.55
+        ? "Big groove"
+        : "Laid back";
+  const backingBandMeter = [0.62, 0.92, 0.74, 1, 0.68].map(
+    (shape) =>
+      `${Math.max(12, Math.round(backingBandEnergy * shape))}%`,
+  );
 
   const stageNotes = useMemo<KeyboardStageNote[]>(
     () =>
@@ -941,6 +962,141 @@ export default function Home() {
                 <strong>{Math.round(Math.abs(hero.latestFeedback?.offsetMs ?? 0))}ms</strong>
                 <span>Last offset</span>
               </div>
+            </div>
+          </section>
+
+          <section
+            aria-labelledby="backing-band-heading"
+            className="coach-section backing-band-section"
+          >
+            <div className="section-kicker">
+              <span id="backing-band-heading">Backing band</span>
+              <strong
+                aria-atomic="true"
+                aria-live="polite"
+                className={`band-status${
+                  hero.backingBand.active
+                    ? " is-live"
+                    : hero.settings.backingBandEnabled
+                      ? " is-ready"
+                      : " is-off"
+                }`}
+              >
+                {backingBandStatus}
+              </strong>
+            </div>
+
+            <div
+              className={`band-console${
+                hero.settings.backingBandEnabled ? " is-enabled" : ""
+              }${hero.backingBand.active ? " is-active" : ""}`}
+            >
+              <div className="band-console-head">
+                <div className="band-identity">
+                  <span className="band-icon" aria-hidden="true">
+                    <AudioLines size={17} />
+                  </span>
+                  <div>
+                    <strong>Your band</strong>
+                    <span>Drums · bass · rhythm</span>
+                  </div>
+                </div>
+                <button
+                  aria-label={`${
+                    hero.settings.backingBandEnabled ? "Turn off" : "Turn on"
+                  } backing band`}
+                  aria-pressed={hero.settings.backingBandEnabled}
+                  className={`band-power${
+                    hero.settings.backingBandEnabled ? " on" : ""
+                  }`}
+                  onClick={() =>
+                    hero.setBackingBandEnabled(
+                      !hero.settings.backingBandEnabled,
+                    )
+                  }
+                  type="button"
+                >
+                  <span aria-hidden="true" className="band-power-light" />
+                  {hero.settings.backingBandEnabled ? "On" : "Off"}
+                </button>
+              </div>
+
+              <div
+                aria-label={
+                  hero.settings.backingBandEnabled
+                    ? `Backing band energy ${backingBandEnergy} percent`
+                    : "Backing band is off"
+                }
+                className="band-energy"
+                role="img"
+              >
+                <div aria-hidden="true" className="band-energy-bars">
+                  {backingBandMeter.map((height, index) => (
+                    <span key={index} style={{ height }} />
+                  ))}
+                </div>
+                <div className="band-energy-copy" aria-hidden="true">
+                  <strong>{hero.backingBand.active ? backingBandEnergy : 0}%</strong>
+                  <span>{hero.backingBand.active ? "Stage energy" : "On standby"}</span>
+                </div>
+              </div>
+
+              <div className="band-control-grid">
+                <div className="band-control">
+                  <div className="band-control-heading">
+                    <label htmlFor="backing-band-mix">
+                      <SlidersHorizontal size={11} aria-hidden="true" /> Band mix
+                    </label>
+                    <output htmlFor="backing-band-mix">
+                      {Math.round(hero.settings.backingBandMix * 100)}%
+                    </output>
+                  </div>
+                  <input
+                    aria-label="Backing band volume"
+                    aria-valuetext={`${Math.round(hero.settings.backingBandMix * 100)} percent`}
+                    className="band-range"
+                    disabled={!hero.settings.backingBandEnabled}
+                    id="backing-band-mix"
+                    max={1}
+                    min={0}
+                    onChange={(event) =>
+                      hero.setBackingBandMix(Number(event.target.value))
+                    }
+                    step={0.05}
+                    type="range"
+                    value={hero.settings.backingBandMix}
+                  />
+                </div>
+                <div className="band-control">
+                  <div className="band-control-heading">
+                    <label htmlFor="backing-band-intensity">
+                      <Zap size={11} aria-hidden="true" /> Intensity
+                    </label>
+                    <output htmlFor="backing-band-intensity">
+                      {backingBandIntensityLabel}
+                    </output>
+                  </div>
+                  <input
+                    aria-label="Backing band intensity"
+                    aria-valuetext={backingBandIntensityLabel}
+                    className="band-range band-intensity-range"
+                    disabled={!hero.settings.backingBandEnabled}
+                    id="backing-band-intensity"
+                    max={1}
+                    min={0}
+                    onChange={(event) =>
+                      hero.setBackingBandIntensity(Number(event.target.value))
+                    }
+                    step={0.05}
+                    type="range"
+                    value={hero.settings.backingBandIntensity}
+                  />
+                </div>
+              </div>
+
+              <p className="band-sync-note">
+                Follows every tempo change, loop, rewind, and restart.
+              </p>
             </div>
           </section>
 
