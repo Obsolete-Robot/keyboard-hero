@@ -7,6 +7,7 @@
  */
 
 import { deriveHarmonyAtBeat } from "@/lib/accompaniment";
+import { scheduleAudioSourceWindow } from "@/lib/audioScheduling";
 import type { Song } from "@/lib/songs";
 
 export type SynthWaveform = "piano" | "electric" | "organ";
@@ -567,6 +568,7 @@ export class KeyboardSynth {
     for (const [index, partial] of partials.entries()) {
       const oscillator = context.createOscillator();
       const partialGain = context.createGain();
+      let oscillatorStopAt: number;
       oscillator.type = partial.type;
       oscillator.frequency.setValueAtTime(frequency * partial.ratio, startAt);
       oscillator.detune.value = partial.detune;
@@ -588,13 +590,13 @@ export class KeyboardSynth {
           0.0001,
           startAt + partialDuration,
         );
-        oscillator.stop(startAt + partialDuration + 0.04);
+        oscillatorStopAt = startAt + partialDuration + 0.04;
       } else {
-        oscillator.stop(startAt + naturalDuration);
+        oscillatorStopAt = startAt + naturalDuration;
       }
       oscillator.connect(partialGain);
       partialGain.connect(gain);
-      oscillator.start(startAt);
+      scheduleAudioSourceWindow(oscillator, startAt, oscillatorStopAt);
       oscillators.push(oscillator);
       nodes.push(oscillator, partialGain);
     }

@@ -29,9 +29,9 @@ import KeyboardStage, {
   type KeyboardHitFeedback,
   type KeyboardStageNote,
 } from "@/components/KeyboardStage";
+import PerformanceResults from "@/components/PerformanceResults";
 import {
   useKeyboardHeroCore,
-  type KeyboardHeroScore,
   type NoteResult,
 } from "@/hooks/useKeyboardHeroCore";
 import {
@@ -97,6 +97,7 @@ interface CelebrationCopy {
   headline: string;
   detail: string;
   tone: CelebrationTone;
+  variant: "judgement" | "milestone";
 }
 
 function performanceCelebration(
@@ -104,122 +105,87 @@ function performanceCelebration(
   combo: number,
 ): CelebrationCopy | null {
   if (!feedback) return null;
+  const offset = Math.round(Math.abs(feedback.offsetMs));
+  const timingDirection =
+    offset <= 8 ? "Dead center" : `${offset}ms ${feedback.offsetMs < 0 ? "early" : "late"}`;
+
   if (feedback.grade === "miss") {
     return {
-      eyebrow: "Miss - reset and rise",
-      headline: "Shake it off!",
-      detail: "Find the next lane. One note never defines the run.",
+      eyebrow: "Reset // next note",
+      headline: "Miss",
+      detail: "Head up. Find the next lane.",
       tone: "miss",
+      variant: "judgement",
     };
   }
-  if (combo >= 25) {
+
+  const isMilestone =
+    combo === 4 ||
+    combo === 8 ||
+    combo === 15 ||
+    combo === 25 ||
+    (combo > 25 && combo % 10 === 0);
+
+  if (isMilestone && combo >= 25) {
     return {
-      eyebrow: `${combo} note streak`,
+      eyebrow: `${combo} straight // no breaks`,
       headline: "Rockstar!",
-      detail: "The whole stage is yours. Keep breathing and ride it home.",
+      detail: "The whole stage is lit. Ride it home.",
       tone: "rockstar",
+      variant: "milestone",
     };
   }
-  if (combo >= 15) {
+  if (isMilestone && combo >= 15) {
     return {
-      eyebrow: `${combo} note streak`,
+      eyebrow: `${combo} straight // streak live`,
       headline: "On fire!",
-      detail: "Your hands know the path now. Stay loose.",
+      detail: "Your hands know the path. Stay loose.",
       tone: "rockstar",
+      variant: "milestone",
     };
   }
-  if (combo >= 8) {
+  if (isMilestone && combo >= 8) {
     return {
-      eyebrow: `${combo} note streak`,
+      eyebrow: `${combo} straight // streak live`,
       headline: "Locked in!",
-      detail: "That timing is turning into instinct.",
+      detail: "Timing is turning into instinct.",
       tone: feedback.grade === "perfect" ? "perfect" : "great",
+      variant: "milestone",
     };
   }
-  if (combo >= 4) {
+  if (isMilestone && combo >= 4) {
     return {
-      eyebrow: `${combo} note streak`,
-      headline: "Nice!",
-      detail: "The groove is building. Look one note ahead.",
+      eyebrow: `${combo} straight // streak started`,
+      headline: "Groove live!",
+      detail: "The groove is building. Look ahead.",
       tone: feedback.grade === "perfect" ? "perfect" : "great",
+      variant: "milestone",
     };
   }
   if (feedback.grade === "perfect") {
     return {
       eyebrow: "Perfect timing",
-      headline: "Dead center!",
-      detail: "Exactly on the bright bar. Remember that feel.",
+      headline: "Perfect",
+      detail: `${timingDirection} // remember that feel`,
       tone: "perfect",
+      variant: "judgement",
     };
   }
   if (feedback.grade === "great") {
     return {
-      eyebrow: feedback.offsetMs < 0 ? "Great - a touch early" : "Great - a touch late",
-      headline: "So close!",
-      detail: "Keep the same motion and settle into the pulse.",
+      eyebrow: timingDirection,
+      headline: "Great",
+      detail: "Same motion. Settle into the pulse.",
       tone: "great",
+      variant: "judgement",
     };
   }
   return {
-    eyebrow: feedback.offsetMs < 0 ? "Good - just early" : "Good - just late",
-    headline: "Keep rolling!",
-    detail: "You landed it. Smooth beats rushed every time.",
+    eyebrow: timingDirection,
+    headline: "Landed",
+    detail: "Stay in it. Smooth beats rushed.",
     tone: "good",
-  };
-}
-
-function performanceRating(
-  score: KeyboardHeroScore,
-  mode: "flow" | "wait" | "listen",
-) {
-  if (score.hits + score.misses === 0) {
-    return {
-      grade: "—",
-      title: mode === "listen" ? "Demo complete" : "Ready for your run",
-      message:
-        mode === "listen"
-          ? "You heard the full arrangement. Switch to Flow or Wait when you are ready to earn your rating."
-          : "No notes were judged this time. Start from the top when you are ready to earn your rating.",
-      tone: "practice",
-    };
-  }
-  if (score.accuracy >= 97 && score.misses === 0) {
-    return {
-      grade: "S",
-      title: "Legendary run",
-      message: "Every light hit at once. Take the encore - you earned it.",
-      tone: "legendary",
-    };
-  }
-  if (score.accuracy >= 92) {
-    return {
-      grade: "A",
-      title: "Rockstar performance",
-      message: "Precision, momentum, and real musical control. Run it back even faster.",
-      tone: "rockstar",
-    };
-  }
-  if (score.accuracy >= 84) {
-    return {
-      grade: "B",
-      title: "Locked in",
-      message: "A confident run with a strong pulse. Polish the misses and this song is yours.",
-      tone: "locked",
-    };
-  }
-  if (score.accuracy >= 72) {
-    return {
-      grade: "C",
-      title: "Rising star",
-      message: "The shape is there. Slow it down, loop the rough section, and build the streak.",
-      tone: "rising",
-    };
-  }
-  return {
-    grade: "R",
-    title: "First run complete",
-    message: "Finishing is the first win. Drop the tempo and turn every miss into a target.",
-    tone: "practice",
+    variant: "judgement",
   };
 }
 
@@ -328,8 +294,6 @@ export default function Home() {
   const isFinishing = hero.isFinishing;
   const songComplete = hero.songComplete;
   const positionBeatRef = useRef(hero.positionBeat);
-  const resultsReplayRef = useRef<HTMLButtonElement>(null);
-  const resultsReturnFocusRef = useRef<HTMLElement | null>(null);
   const togglePlayFromKey = hero.togglePlay;
   const rewindFromKey = hero.rewindBeats;
   const seekFromKey = hero.seekBeat;
@@ -339,31 +303,13 @@ export default function Home() {
   }, [hero.positionBeat]);
 
   useEffect(() => {
-    if (!songComplete) return;
-    const activeElement = document.activeElement;
-    resultsReturnFocusRef.current =
-      activeElement instanceof HTMLElement && activeElement !== document.body
-        ? activeElement
-        : null;
-    const focusFrame = window.requestAnimationFrame(() => {
-      resultsReplayRef.current?.focus({ preventScroll: true });
-    });
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      const returnTarget = resultsReturnFocusRef.current;
-      resultsReturnFocusRef.current = null;
-      if (returnTarget?.isConnected) {
-        returnTarget.focus({ preventScroll: true });
-      }
-    };
-  }, [songComplete]);
-
-  useEffect(() => {
     const handleTransportKeys = (event: globalThis.KeyboardEvent) => {
+      if (songComplete) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
         (target.isContentEditable ||
+          target.tagName === "BUTTON" ||
           target.tagName === "INPUT" ||
           target.tagName === "SELECT" ||
           target.tagName === "TEXTAREA")
@@ -383,7 +329,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", handleTransportKeys);
     return () => window.removeEventListener("keydown", handleTransportKeys);
-  }, [rewindFromKey, seekFromKey, togglePlayFromKey]);
+  }, [rewindFromKey, seekFromKey, songComplete, togglePlayFromKey]);
 
   const activeSection = currentSection(song, hero.positionBeat);
   const nextNote = nextSongNote(song, hero.positionBeat);
@@ -423,10 +369,6 @@ export default function Home() {
             ? "building"
             : "base";
   const streakProgress = Math.min(100, (hero.score.combo / 25) * 100);
-  const performanceResult = performanceRating(
-    hero.score,
-    hero.settings.practiceMode,
-  );
   const hasMIDIActivity =
     hero.midi.connectedName !== null &&
     typeof hero.midi.lastNote === "number" &&
@@ -436,6 +378,9 @@ export default function Home() {
   const midiMappingActive =
     hero.midi.calibration.calibrated &&
     hero.midi.calibration.transpose !== 0;
+  const showMutedPlayerPianoCue =
+    !hero.settings.synthEnabled &&
+    (hero.pressedNotes.size > 0 || hero.midi.lastNote !== null);
   const midiCalibrationPrompt =
     hero.midi.calibration.phase === "release-left"
       ? {
@@ -721,7 +666,7 @@ export default function Home() {
               (hero.countdown === null || hero.countdown <= 0) && (
                 <div
                   aria-hidden="true"
-                  className={`stage-encouragement tone-${celebration.tone}`}
+                  className={`stage-encouragement tone-${celebration.tone} variant-${celebration.variant}`}
                   key={feedbackKey}
                 >
                   <span className="encouragement-kicker">{celebration.eyebrow}</span>
@@ -759,67 +704,6 @@ export default function Home() {
               </div>
             )}
 
-            {songComplete && (
-              <div className="performance-results-overlay">
-                <section
-                  className={`performance-results-card result-${performanceResult.tone}`}
-                  role="dialog"
-                  aria-modal="false"
-                  aria-live="polite"
-                  aria-labelledby="performance-results-title"
-                >
-                  <span className="results-kicker">Performance complete</span>
-                  <div className="results-hero">
-                    <div className="results-grade" aria-label={`Rating ${performanceResult.grade}`}>
-                      {performanceResult.grade}
-                    </div>
-                    <div>
-                      <h2 id="performance-results-title">{performanceResult.title}</h2>
-                      <p>{performanceResult.message}</p>
-                    </div>
-                  </div>
-
-                  <div className="results-score">
-                    <span>Final score</span>
-                    <strong>{hero.score.points.toLocaleString()}</strong>
-                  </div>
-
-                  <div className="results-grid" aria-label="Performance statistics">
-                    <div>
-                      <strong>{hero.score.accuracy.toFixed(0)}%</strong>
-                      <span>Accuracy</span>
-                    </div>
-                    <div>
-                      <strong>{hero.score.hits}</strong>
-                      <span>Notes landed</span>
-                    </div>
-                    <div>
-                      <strong>{hero.score.misses}</strong>
-                      <span>To revisit</span>
-                    </div>
-                    <div>
-                      <strong>{hero.score.bestCombo}×</strong>
-                      <span>Best streak</span>
-                    </div>
-                  </div>
-
-                  <div className="results-actions">
-                    <button
-                      ref={resultsReplayRef}
-                      className="results-replay"
-                      onClick={replaySong}
-                    >
-                      <Play size={15} fill="currentColor" aria-hidden="true" />
-                      Play it again
-                    </button>
-                    <button className="results-practice" onClick={hero.restart}>
-                      <RotateCcw size={15} aria-hidden="true" />
-                      Back to practice
-                    </button>
-                  </div>
-                </section>
-              </div>
-            )}
           </div>
 
           <div className="transport">
@@ -1158,14 +1042,36 @@ export default function Home() {
               />
             </div>
             <div className="setting-row">
-              <span><Headphones size={12} aria-hidden="true" /> Piano sound</span>
+              <span>
+                <Headphones size={12} aria-hidden="true" /> Player piano —{" "}
+                {hero.settings.synthEnabled ? "On" : "Muted"}
+              </span>
               <button
-                aria-label="Toggle piano sound"
+                aria-label={
+                  hero.settings.synthEnabled
+                    ? "Mute player piano"
+                    : "Turn on player piano"
+                }
                 aria-pressed={hero.settings.synthEnabled}
                 className={`toggle${hero.settings.synthEnabled ? " on" : ""}`}
                 onClick={() => hero.setSynthEnabled(!hero.settings.synthEnabled)}
               />
             </div>
+            {showMutedPlayerPianoCue && (
+              <div className="setting-row">
+                <span aria-live="polite" role="status">
+                  Your keys are muted —
+                </span>
+                <button
+                  aria-label="Turn on player piano"
+                  className="midi-align-action"
+                  onClick={() => hero.setSynthEnabled(true)}
+                  type="button"
+                >
+                  Turn on
+                </button>
+              </div>
+            )}
             <div className="setting-row">
               <label htmlFor="midi-input-select">
                 <Usb size={12} aria-hidden="true" /> MIDI input
@@ -1418,6 +1324,17 @@ export default function Home() {
           </div>
         </aside>
       </div>
+
+      {songComplete && (
+        <PerformanceResults
+          noteResults={hero.noteResults}
+          onPractice={hero.restart}
+          onReplay={replaySong}
+          practiceMode={hero.settings.practiceMode}
+          score={hero.score}
+          song={song}
+        />
+      )}
 
       {!hero.midi.supported && (
         <div className="permission-note">

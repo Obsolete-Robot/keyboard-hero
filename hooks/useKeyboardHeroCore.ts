@@ -966,7 +966,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   }, []);
 
   const setSynthEnabled = useCallback((synthEnabled: boolean) => {
-    setSettings((current) => ({ ...current, synthEnabled }));
+    setSettings((current) => {
+      const next = { ...current, synthEnabled };
+      settingsRef.current = next;
+      return next;
+    });
     if (!synthEnabled) synthRef.current?.allNotesOff(true);
   }, []);
 
