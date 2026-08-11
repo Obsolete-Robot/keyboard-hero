@@ -138,6 +138,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /feedbackEvents/);
   assert.match(engine, /songComplete/);
   assert.match(engine, /visualBeat/);
+  assert.match(engine, /practiceMode === "listen" && !isPlayingRef\.current\) play\(\)/);
+  assert.match(engine, /reconcileScheduledVoices/);
   assert.match(engine, /tempoScale: clamp\(scale, 0\.25, 1\.25\)/);
 
   await access(new URL("../public/og-rock-v2.png", import.meta.url));

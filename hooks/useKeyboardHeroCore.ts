@@ -10,6 +10,10 @@ import {
 
 import { KeyboardSynth } from "@/lib/audio";
 import {
+  reconcileScheduledVoices,
+  transportSubdivisionAtBeat,
+} from "@/lib/audioScheduling";
+import {
   isValidMIDICalibrationSpan,
   mapMIDINoteToKeyboardRange,
 } from "@/lib/midiCalibration";
@@ -484,6 +488,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const lastMetronomeBeatRef = useRef<number | null>(null);
   const feedbackSequenceRef = useRef(0);
   const backingBandActiveRef = useRef(false);
+  const backingBandFailedStepRef = useRef<number | null>(null);
 
   const synth = useCallback((): KeyboardSynth => {
     if (!synthRef.current) {
@@ -508,10 +513,52 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const stopListenVoices = useCallback(() => {
     const instrument = synthRef.current;
     for (const noteId of listenVoicesRef.current) {
-      instrument?.noteOff(`listen:${noteId}`, undefined, 0.04);
+      try {
+        instrument?.noteOff(`listen:${noteId}`, undefined, 0.04);
+      } catch {
+        // A failed voice release must never strand the transport RAF.
+      }
     }
     listenVoicesRef.current.clear();
   }, []);
+
+  const syncListenVoices = useCallback(
+    (beat: number) => {
+      let instrument: KeyboardSynth;
+      try {
+        instrument = synth();
+      } catch {
+        return;
+      }
+      reconcileScheduledVoices(
+        song.notes,
+        beat,
+        listenVoicesRef.current,
+        (note) => {
+          instrument.noteOn(
+            `listen:${note.id}`,
+            note.midi,
+            (note.velocity ?? 92) / 127,
+          );
+        },
+        (note) => {
+          instrument.noteOff(`listen:${note.id}`, undefined, 0.06);
+        },
+      );
+    },
+    [song.notes, synth],
+  );
+
+  const playMetronomeSafely = useCallback(
+    (accent: boolean) => {
+      try {
+        synth().playMetronome(accent);
+      } catch {
+        // A metronome source cannot be allowed to terminate transport.
+      }
+    },
+    [synth],
+  );
 
   const releaseHeldSources = useCallback((sourcePrefix: string) => {
     for (const [midiNote, sources] of heldSourcesRef.current) {
@@ -637,7 +684,12 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   const stopBackingBand = useCallback(
     (immediate = true) => {
-      synthRef.current?.stopAccompaniment(immediate);
+      backingBandFailedStepRef.current = null;
+      try {
+        synthRef.current?.stopAccompaniment(immediate);
+      } catch {
+        // Audio teardown is best-effort; transport state remains authoritative.
+      }
       setBackingBandFrame(false);
     },
     [setBackingBandFrame],
@@ -650,45 +702,59 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       currentLoop: KeyboardHeroLoop = loopRef.current,
     ) => {
       const normalizedBeat = Math.max(0, beat);
-      if (
-        !currentSettings.backingBandEnabled ||
-        currentSettings.backingBandMix <= 0
-      ) {
-        if (backingBandActiveRef.current) {
-          synthRef.current?.stopAccompaniment(true);
-          setBackingBandFrame(false);
+      const stepIndex = transportSubdivisionAtBeat(normalizedBeat);
+      if (backingBandFailedStepRef.current === stepIndex) return;
+      try {
+        if (
+          !currentSettings.backingBandEnabled ||
+          currentSettings.backingBandMix <= 0
+        ) {
+          backingBandFailedStepRef.current = null;
+          if (backingBandActiveRef.current) {
+            synthRef.current?.stopAccompaniment(true);
+            setBackingBandFrame(false);
+          }
+          return;
         }
-        return;
-      }
 
-      const instrument = synth();
-      if (instrument.state !== "running") {
+        const instrument = synth();
+        if (instrument.state !== "running") {
+          setBackingBandFrame(false);
+          return;
+        }
+
+        const accompanimentRunning = instrument.syncAccompaniment({
+          song,
+          beat: normalizedBeat,
+          tempoScale: currentSettings.tempoScale,
+          loop: currentLoop,
+          intensity: currentSettings.backingBandIntensity,
+        });
+        if (!accompanimentRunning) {
+          backingBandFailedStepRef.current = stepIndex;
+          setBackingBandFrame(false);
+          return;
+        }
+
+        backingBandFailedStepRef.current = null;
+        const beatFloor = Math.floor(normalizedBeat);
+        const subdivisionPhase = normalizedBeat * 2 - stepIndex;
+        const pulse = (1 - subdivisionPhase) ** 3;
+        const downbeat = beatFloor % song.timeSignature[0] === 0;
+        const energy = Math.sqrt(currentSettings.backingBandMix) *
+          (0.28 + currentSettings.backingBandIntensity * 0.62) *
+          (0.55 + pulse * 0.45) *
+          (downbeat ? 1.08 : 1);
+        setBackingBandFrame(true, clamp(energy, 0, 1));
+      } catch {
+        backingBandFailedStepRef.current = stepIndex;
+        try {
+          synthRef.current?.stopAccompaniment(true);
+        } catch {
+          // The failed Web Audio graph may already be detached.
+        }
         setBackingBandFrame(false);
-        return;
       }
-
-      const accompanimentRunning = instrument.syncAccompaniment({
-        song,
-        beat: normalizedBeat,
-        tempoScale: currentSettings.tempoScale,
-        loop: currentLoop,
-        intensity: currentSettings.backingBandIntensity,
-      });
-      if (!accompanimentRunning) {
-        setBackingBandFrame(false);
-        return;
-      }
-
-      const beatFloor = Math.floor(normalizedBeat);
-      const stepIndex = Math.floor(normalizedBeat * 2 + 0.000_001);
-      const subdivisionPhase = normalizedBeat * 2 - stepIndex;
-      const pulse = (1 - subdivisionPhase) ** 3;
-      const downbeat = beatFloor % song.timeSignature[0] === 0;
-      const energy = Math.sqrt(currentSettings.backingBandMix) *
-        (0.28 + currentSettings.backingBandIntensity * 0.62) *
-        (0.55 + pulse * 0.45) *
-        (downbeat ? 1.08 : 1);
-      setBackingBandFrame(true, clamp(energy, 0, 1));
     },
     [setBackingBandFrame, song, synth],
   );
@@ -935,6 +1001,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   const setTempoScale = useCallback((scale: number) => {
     if (countInSecondsRef.current > 0) return;
+    backingBandFailedStepRef.current = null;
     setSettings((current) => ({
       ...current,
       tempoScale: clamp(scale, 0.25, 1.25),
@@ -956,9 +1023,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       ) {
         stopListenVoices();
       }
-      setSettings((current) => ({ ...current, practiceMode }));
+      settingsRef.current = { ...settingsRef.current, practiceMode };
+      setSettings((current) => {
+        const next = { ...current, practiceMode };
+        settingsRef.current = next;
+        return next;
+      });
+      if (practiceMode === "listen" && !isPlayingRef.current) play();
     },
-    [stopListenVoices],
+    [play, stopListenVoices],
   );
 
   const setMetronomeEnabled = useCallback((metronomeEnabled: boolean) => {
@@ -976,6 +1049,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   const setBackingBandEnabled = useCallback(
     (backingBandEnabled: boolean) => {
+      backingBandFailedStepRef.current = null;
       setSettings((current) => {
         const next = { ...current, backingBandEnabled };
         settingsRef.current = next;
@@ -987,6 +1061,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   );
 
   const setBackingBandMix = useCallback((mix: number) => {
+    backingBandFailedStepRef.current = null;
     const backingBandMix = clamp(mix, 0, 1);
     setSettings((current) => {
       const next = { ...current, backingBandMix };
@@ -997,6 +1072,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   }, []);
 
   const setBackingBandIntensity = useCallback((intensity: number) => {
+    backingBandFailedStepRef.current = null;
     const backingBandIntensity = clamp(intensity, 0, 1);
     setSettings((current) => {
       const next = { ...current, backingBandIntensity };
@@ -1645,9 +1721,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           crossedBeat <= 0 &&
           crossedBeat > Math.floor(previousVisualBeat + 0.000_001)
         ) {
-          synth().playMetronome(
-            crossedBeat % song.timeSignature[0] === 0,
-          );
+          playMetronomeSafely(crossedBeat % song.timeSignature[0] === 0);
           if (crossedBeat === 0) lastMetronomeBeatRef.current = 0;
         }
         preRollVisualBeatRef.current = nextVisualBeat;
@@ -1716,17 +1790,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       }
 
       if (currentSettings.practiceMode === "listen" && currentSettings.synthEnabled) {
-        for (const note of song.notes) {
-          const voiceId = `listen:${note.id}`;
-          const active = nextBeat >= note.startBeat && nextBeat < note.startBeat + note.durationBeats;
-          if (active && !listenVoicesRef.current.has(note.id)) {
-            listenVoicesRef.current.add(note.id);
-            synth().noteOn(voiceId, note.midi, (note.velocity ?? 92) / 127);
-          } else if (!active && listenVoicesRef.current.has(note.id)) {
-            listenVoicesRef.current.delete(note.id);
-            synth().noteOff(voiceId, undefined, 0.06);
-          }
-        }
+        syncListenVoices(nextBeat);
+      } else if (listenVoicesRef.current.size > 0) {
+        stopListenVoices();
       }
 
       const beatNumber = Math.floor(nextBeat + 0.0001);
@@ -1735,7 +1801,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         beatNumber !== lastMetronomeBeatRef.current
       ) {
         lastMetronomeBeatRef.current = beatNumber;
-        synth().playMetronome(beatNumber % song.timeSignature[0] === 0);
+        playMetronomeSafely(beatNumber % song.timeSignature[0] === 0);
       }
 
       if (nextBeat >= loopEnd) {
@@ -1793,13 +1859,14 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     commitPosition,
     isPlaying,
     pause,
+    playMetronomeSafely,
     registerResult,
     resetScore,
     song,
     stopBackingBand,
     stopListenVoices,
     syncBackingBand,
-    synth,
+    syncListenVoices,
   ]);
 
   useEffect(
