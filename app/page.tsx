@@ -430,19 +430,59 @@ export default function Home() {
   const hasMIDIActivity =
     hero.midi.connectedName !== null &&
     typeof hero.midi.lastNote === "number" &&
+    typeof hero.midi.lastMappedNote === "number" &&
     hero.midi.lastMessageInRange !== null;
   const activeMIDIChannel = hero.midi.detectedChannel ?? hero.midi.channel;
+  const midiMappingActive =
+    hero.midi.calibration.calibrated &&
+    hero.midi.calibration.transpose !== 0;
+  const midiCalibrationPrompt =
+    hero.midi.calibration.phase === "release-left"
+      ? {
+          title: "Release the leftmost key.",
+          detail: "Then the rightmost-key step will light up.",
+          short: "release the leftmost key",
+        }
+      : hero.midi.calibration.phase === "right"
+        ? {
+            title: "Now press the physical rightmost key.",
+            detail: "Use the highest white key on the 25-key keyboard.",
+            short: "press the physical rightmost key",
+          }
+        : hero.midi.calibration.phase === "release-right"
+          ? {
+              title: "Release the rightmost key to finish.",
+              detail: "Keyboard Hero is checking the full 25-key span.",
+              short: "release the rightmost key",
+            }
+          : {
+              title: "Press the physical leftmost key.",
+              detail: "Use the lowest white key, then release it.",
+              short: "press the physical leftmost key",
+            };
+  const midiLiveNote = hasMIDIActivity
+    ? midiMappingActive
+      ? `${midiToNoteName(hero.midi.lastMappedNote!)} mapped from raw ${midiToNoteName(hero.midi.lastNote!)}`
+      : midiToNoteName(hero.midi.lastMappedNote!)
+    : null;
   const midiDeviceHint = !hero.midi.connectedName
     ? "Z–M / Q–I maps C3–C5"
+    : hero.midi.calibration.active
+      ? `Alignment listening · ${midiCalibrationPrompt.short}`
+    : hero.midi.calibration.needsVerification
+      ? "Keyboard alignment needs verification · choose Verify"
     : !hasMIDIActivity
-      ? "Performance port connected · play a C3–C5 key"
+      ? hero.midi.calibration.calibrated &&
+        hero.midi.calibration.rawNote !== null
+        ? `Aligned ${midiToNoteName(hero.midi.calibration.rawNote)} → C3 · play a key`
+        : "Performance port connected · play a C3–C5 key"
       : hero.midi.lastMessageInRange
-        ? `${midiToNoteName(hero.midi.lastNote!)} · ${
+        ? `${midiLiveNote} · ${
             activeMIDIChannel === null
               ? "Channel detecting"
               : `Channel ${activeMIDIChannel + 1}`
           } · signal received`
-        : `${midiToNoteName(hero.midi.lastNote!)} outside C3–C5 · shift the MPK octave`;
+        : `${midiLiveNote} outside C3–C5 · align the keyboard`;
   const midiChannelSupport =
     hero.midi.channel !== null
       ? `Listening on channel ${hero.midi.channel + 1}`
@@ -451,6 +491,12 @@ export default function Home() {
         : hero.midi.connectedName
           ? "Auto detects from your first C3–C5 key"
           : "Auto detects after a MIDI input connects";
+  const midiTransposeLabel =
+    hero.midi.calibration.transpose === 0
+      ? "No transposition needed"
+      : `${hero.midi.calibration.transpose > 0 ? "+" : ""}${hero.midi.calibration.transpose} semitone${
+          Math.abs(hero.midi.calibration.transpose) === 1 ? "" : "s"
+        }`;
   const backingBandStatus = !hero.settings.backingBandEnabled
     ? "Band off"
     : hero.backingBand.active
@@ -1173,6 +1219,178 @@ export default function Home() {
                   {midiChannelSupport}
                 </small>
               </div>
+            </div>
+            <div
+              aria-labelledby="midi-align-title"
+              className={`midi-align-card${
+                hero.midi.calibration.active ? " is-listening" : ""
+              }${
+                hero.midi.calibration.calibrated ? " is-calibrated" : ""
+              }${
+                hero.midi.calibration.needsVerification
+                  ? " needs-verification"
+                  : ""
+              }${hero.midi.calibration.error ? " has-error" : ""}`}
+              role="group"
+            >
+              <div className="midi-align-head">
+                <div className="midi-align-title">
+                  <span className="midi-align-icon" aria-hidden="true">
+                    <CircleGauge size={15} />
+                  </span>
+                  <div>
+                    <strong id="midi-align-title">Align keyboard</strong>
+                    <span>Fix an octave mismatch</span>
+                  </div>
+                </div>
+
+                {hero.midi.calibration.active ? (
+                  <button
+                    className="midi-align-action quiet"
+                    onClick={hero.cancelMIDICalibration}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                ) : (
+                  <button
+                    className="midi-align-action"
+                    disabled={!hero.midi.connectedName}
+                    onClick={hero.startMIDICalibration}
+                    type="button"
+                  >
+                    {hero.midi.calibration.needsVerification
+                      ? "Verify"
+                      : hero.midi.calibration.calibrated
+                        ? "Re-align"
+                        : "Align"}
+                  </button>
+                )}
+              </div>
+
+              <div
+                aria-atomic="true"
+                aria-live="polite"
+                className="midi-align-body"
+              >
+                {hero.midi.calibration.active ? (
+                  <div className="midi-align-listening">
+                    {hero.midi.calibration.error && (
+                      <div className="midi-align-error">
+                        <div>
+                          <strong>Try again</strong>
+                          <span>{hero.midi.calibration.error}</span>
+                        </div>
+                        <button
+                          className="midi-align-retry"
+                          onClick={hero.startMIDICalibration}
+                          type="button"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    <div className="midi-align-steps" aria-hidden="true">
+                      <span
+                        className={
+                          hero.midi.calibration.rawNote !== null
+                            ? "complete"
+                            : "active"
+                        }
+                      >
+                        1 <small>Left</small>
+                      </span>
+                      <i />
+                      <span
+                        className={
+                          hero.midi.calibration.rightRawNote !== null
+                            ? "complete"
+                            : hero.midi.calibration.phase === "right" ||
+                                hero.midi.calibration.phase === "release-right"
+                              ? "active"
+                              : ""
+                        }
+                      >
+                        2 <small>Right</small>
+                      </span>
+                    </div>
+                    <div className="midi-align-prompt" role="status">
+                      <span className="midi-align-pulse" aria-hidden="true" />
+                      <div>
+                        <strong>{midiCalibrationPrompt.title}</strong>
+                        <span>{midiCalibrationPrompt.detail}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : hero.midi.calibration.needsVerification ? (
+                  <div className="midi-align-verification" role="status">
+                    <strong>Verify this saved alignment</strong>
+                    <span>
+                      The keyboard reconnected or its setup may have changed.
+                      Choose Verify and play both end keys again.
+                    </span>
+                    <button
+                      className="midi-align-reset"
+                      onClick={hero.resetMIDICalibration}
+                      type="button"
+                    >
+                      <RotateCcw size={10} aria-hidden="true" /> Reset instead
+                    </button>
+                  </div>
+                ) : hero.midi.calibration.calibrated &&
+                  hero.midi.calibration.rawNote !== null ? (
+                  <div className="midi-align-success">
+                    <div className="midi-align-endpoints">
+                      <div
+                        className="midi-align-map"
+                        aria-label={`Raw ${midiToNoteName(hero.midi.calibration.rawNote)} maps to C3`}
+                      >
+                        <small>Left</small>
+                        <span>{midiToNoteName(hero.midi.calibration.rawNote)}</span>
+                        <span aria-hidden="true">→</span>
+                        <strong>C3</strong>
+                      </div>
+                      {hero.midi.calibration.rightRawNote !== null && (
+                        <div
+                          className="midi-align-map"
+                          aria-label={`Raw ${midiToNoteName(hero.midi.calibration.rightRawNote)} maps to C5`}
+                        >
+                          <small>Right</small>
+                          <span>
+                            {midiToNoteName(
+                              hero.midi.calibration.rightRawNote,
+                            )}
+                          </span>
+                          <span aria-hidden="true">→</span>
+                          <strong>C5</strong>
+                        </div>
+                      )}
+                    </div>
+                    <div className="midi-align-result">
+                      <span>✓ Aligned · {midiTransposeLabel}</span>
+                      <button
+                        aria-label="Reset keyboard alignment"
+                        className="midi-align-reset"
+                        onClick={hero.resetMIDICalibration}
+                        type="button"
+                      >
+                        <RotateCcw size={10} aria-hidden="true" /> Reset
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p>
+                    {hero.midi.connectedName
+                      ? "Use this when a physical key triggers the wrong on-screen note."
+                      : "Connect MIDI first, then align the MPK Mini with its two end keys."}
+                  </p>
+                )}
+              </div>
+              {!hero.midi.calibration.active && (
+                <p className="midi-align-footnote">
+                  Re-align after MPK Octave, KTrans, or preset changes.
+                </p>
+              )}
             </div>
             <div className="setting-row">
               <span><CircleGauge size={12} aria-hidden="true" /> Current target</span>

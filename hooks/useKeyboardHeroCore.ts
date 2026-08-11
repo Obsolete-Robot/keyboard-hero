@@ -9,6 +9,10 @@ import {
 } from "react";
 
 import { KeyboardSynth } from "@/lib/audio";
+import {
+  isValidMIDICalibrationSpan,
+  mapMIDINoteToKeyboardRange,
+} from "@/lib/midiCalibration";
 import { MIDI_MAX, MIDI_MIN, type Song, type SongNote } from "@/lib/songs";
 
 export type PracticeMode = "flow" | "wait" | "listen";
@@ -43,6 +47,28 @@ export interface MIDIInputInfo {
   connected: boolean;
 }
 
+export type MIDICalibrationPhase =
+  | "idle"
+  | "left"
+  | "release-left"
+  | "right"
+  | "release-right";
+
+export interface KeyboardHeroMIDICalibrationState {
+  active: boolean;
+  calibrated: boolean;
+  /** A saved alignment exists but must be verified again for this connection. */
+  needsVerification: boolean;
+  phase: MIDICalibrationPhase;
+  /** Raw device note learned from the physical leftmost key. */
+  rawNote: number | null;
+  /** Raw device note learned from the physical rightmost key. */
+  rightRawNote: number | null;
+  /** Signed semitone offset applied to accepted keybed notes. */
+  transpose: number;
+  error: string | null;
+}
+
 export interface KeyboardHeroMIDIState {
   supported: boolean;
   permission: MIDIPermissionState;
@@ -53,9 +79,13 @@ export interface KeyboardHeroMIDIState {
   channel: number | null;
   /** Zero-based channel learned from the first in-range note-on in Auto mode. */
   detectedChannel: number | null;
+  /** Last raw note number received from the selected device. */
   lastNote: number | null;
+  /** Last note after alignment, or null when it falls outside MIDI 0-127. */
+  lastMappedNote: number | null;
   lastVelocity: number;
   lastMessageInRange: boolean | null;
+  calibration: KeyboardHeroMIDICalibrationState;
   error: string | null;
 }
 
@@ -122,6 +152,9 @@ export interface KeyboardHeroCore {
   connectMIDI: () => Promise<void>;
   selectMIDIInput: (inputId: string | null) => void;
   setMIDIChannel: (channel: number | null) => void;
+  startMIDICalibration: () => void;
+  cancelMIDICalibration: () => void;
+  resetMIDICalibration: () => void;
   noteOn: (midi: number, velocity?: number, source?: string) => void;
   noteOff: (midi: number, source?: string) => void;
   resetScore: () => void;
@@ -144,11 +177,25 @@ interface MIDIAccessLike {
   onstatechange: (() => void) | null;
 }
 
+interface ActiveMIDINoteMapping {
+  mappedNote: number;
+  source: string;
+}
+
+interface MIDICalibrationCandidate {
+  key: string;
+  rawNote: number;
+  channel: number;
+  invalid: boolean;
+}
+
 type MIDIEnabledNavigator = Navigator & {
   requestMIDIAccess?: (options?: { sysex?: boolean }) => Promise<MIDIAccessLike>;
 };
 
 const SETTINGS_KEY = "keyboard-hero.settings.v1";
+const MIDI_CALIBRATION_KEY = "keyboard-hero.midi-calibration.v1";
+const MIDI_CALIBRATION_TIMEOUT_MS = 25_000;
 const PRE_ROLL_SECONDS = 5;
 const POST_ROLL_MIN_SECONDS = 2.5;
 const POST_ROLL_CLEARANCE_BEATS = 1.75;
@@ -170,6 +217,16 @@ const EMPTY_SCORE: KeyboardHeroScore = {
   hits: 0,
   misses: 0,
   accuracy: 100,
+};
+const EMPTY_MIDI_CALIBRATION: KeyboardHeroMIDICalibrationState = {
+  active: false,
+  calibrated: false,
+  needsVerification: false,
+  phase: "idle",
+  rawNote: null,
+  rightRawNote: null,
+  transpose: 0,
+  error: null,
 };
 
 const COMPUTER_KEYS: Readonly<Record<string, number>> = {
@@ -203,6 +260,76 @@ const COMPUTER_KEYS: Readonly<Record<string, number>> = {
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
+
+interface StoredMIDICalibration {
+  rawNote: number;
+  rightRawNote: number;
+  transpose: number;
+}
+
+function readMIDICalibration(inputId: string): KeyboardHeroMIDICalibrationState {
+  if (typeof window === "undefined") return { ...EMPTY_MIDI_CALIBRATION };
+  try {
+    const entries = JSON.parse(
+      window.localStorage.getItem(MIDI_CALIBRATION_KEY) ?? "{}",
+    ) as Record<string, Partial<StoredMIDICalibration>>;
+    const saved = entries[inputId];
+    const rawNote = Number(saved?.rawNote);
+    const rightRawNote = Number(saved?.rightRawNote);
+    const transpose = Number(saved?.transpose);
+    if (
+      !Number.isInteger(rawNote) ||
+      !Number.isInteger(rightRawNote) ||
+      !Number.isInteger(transpose) ||
+      rawNote < 0 ||
+      rightRawNote > 127 ||
+      !isValidMIDICalibrationSpan(rawNote, rightRawNote) ||
+      transpose !== MIDI_MIN - rawNote
+    ) {
+      return { ...EMPTY_MIDI_CALIBRATION };
+    }
+    return {
+      active: false,
+      calibrated: false,
+      needsVerification: true,
+      phase: "idle",
+      rawNote,
+      rightRawNote,
+      transpose,
+      error: null,
+    };
+  } catch {
+    return { ...EMPTY_MIDI_CALIBRATION };
+  }
+}
+
+function persistMIDICalibration(
+  inputId: string,
+  calibration: KeyboardHeroMIDICalibrationState,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    const entries = JSON.parse(
+      window.localStorage.getItem(MIDI_CALIBRATION_KEY) ?? "{}",
+    ) as Record<string, StoredMIDICalibration>;
+    if (
+      calibration.rawNote === null ||
+      calibration.rightRawNote === null ||
+      !calibration.calibrated
+    ) {
+      delete entries[inputId];
+    } else {
+      entries[inputId] = {
+        rawNote: calibration.rawNote,
+        rightRawNote: calibration.rightRawNote,
+        transpose: calibration.transpose,
+      };
+    }
+    window.localStorage.setItem(MIDI_CALIBRATION_KEY, JSON.stringify(entries));
+  } catch {
+    // Storage can be unavailable in private browsing or embedded previews.
+  }
+}
 
 const scoreAccuracy = (hits: number, misses: number): number => {
   const attempts = hits + misses;
@@ -304,8 +431,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     channel: null,
     detectedChannel: null,
     lastNote: null,
+    lastMappedNote: null,
     lastVelocity: 0,
     lastMessageInRange: null,
+    calibration: { ...EMPTY_MIDI_CALIBRATION },
     error: null,
   }));
 
@@ -315,6 +444,23 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const selectedMIDIIdRef = useRef<string | null>(null);
   const midiChannelRef = useRef<number | null>(null);
   const detectedMIDIChannelRef = useRef<number | null>(null);
+  const midiCalibrationRef = useRef<KeyboardHeroMIDICalibrationState>({
+    ...EMPTY_MIDI_CALIBRATION,
+  });
+  const midiCalibrationSnapshotRef =
+    useRef<KeyboardHeroMIDICalibrationState | null>(null);
+  const leftCalibrationCandidateRef = useRef<MIDICalibrationCandidate | null>(
+    null,
+  );
+  const rightCalibrationCandidateRef = useRef<MIDICalibrationCandidate | null>(
+    null,
+  );
+  const midiCalibrationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const activeMIDINotesRef = useRef<Map<string, ActiveMIDINoteMapping>>(
+    new Map(),
+  );
   const noteOnRef = useRef<(midi: number, velocity?: number, source?: string) => void>(
     () => undefined,
   );
@@ -366,6 +512,117 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     }
     listenVoicesRef.current.clear();
   }, []);
+
+  const releaseHeldSources = useCallback((sourcePrefix: string) => {
+    for (const [midiNote, sources] of heldSourcesRef.current) {
+      for (const sourceId of [...sources]) {
+        if (!sourceId.startsWith(sourcePrefix)) continue;
+        synthRef.current?.noteOff(sourceId, undefined, 0.04);
+        sources.delete(sourceId);
+      }
+      if (sources.size === 0) heldSourcesRef.current.delete(midiNote);
+    }
+    setPressedNotes(new Set(heldSourcesRef.current.keys()));
+  }, []);
+
+  const releaseMIDINotes = useCallback(() => {
+    releaseHeldSources("midi:");
+    activeMIDINotesRef.current.clear();
+  }, [releaseHeldSources]);
+
+  const clearMIDICalibrationTimer = useCallback(() => {
+    if (midiCalibrationTimeoutRef.current !== null) {
+      clearTimeout(midiCalibrationTimeoutRef.current);
+      midiCalibrationTimeoutRef.current = null;
+    }
+  }, []);
+
+  const setMIDICalibrationState = useCallback(
+    (calibration: KeyboardHeroMIDICalibrationState) => {
+      midiCalibrationRef.current = calibration;
+      setMIDI((current) => ({ ...current, calibration }));
+    },
+    [],
+  );
+
+  const clearMIDICalibrationCapture = useCallback(() => {
+    clearMIDICalibrationTimer();
+    leftCalibrationCandidateRef.current = null;
+    rightCalibrationCandidateRef.current = null;
+  }, [clearMIDICalibrationTimer]);
+
+  const finishMIDICalibrationCapture = useCallback(
+    (error: string | null = null) => {
+      releaseMIDINotes();
+      clearMIDICalibrationCapture();
+      const baseline =
+        midiCalibrationSnapshotRef.current ?? midiCalibrationRef.current;
+      midiCalibrationSnapshotRef.current = null;
+      setMIDICalibrationState({
+        ...baseline,
+        active: false,
+        phase: "idle",
+        error,
+      });
+    },
+    [clearMIDICalibrationCapture, releaseMIDINotes, setMIDICalibrationState],
+  );
+
+  const cancelMIDICalibration = useCallback(() => {
+    finishMIDICalibrationCapture(null);
+    if (midiChannelRef.current === null) {
+      detectedMIDIChannelRef.current = null;
+      setMIDI((current) => ({
+        ...current,
+        detectedChannel: null,
+        lastNote: null,
+        lastMappedNote: null,
+        lastVelocity: 0,
+        lastMessageInRange: null,
+      }));
+    }
+  }, [finishMIDICalibrationCapture]);
+
+  const armMIDICalibrationTimer = useCallback(() => {
+    clearMIDICalibrationTimer();
+    midiCalibrationTimeoutRef.current = setTimeout(() => {
+      releaseMIDINotes();
+      leftCalibrationCandidateRef.current = null;
+      rightCalibrationCandidateRef.current = null;
+      const next: KeyboardHeroMIDICalibrationState = {
+        ...EMPTY_MIDI_CALIBRATION,
+        active: true,
+        phase: "left",
+        error:
+          "Alignment timed out. Turn off ARP, Latch, Chord and Scale, then retry.",
+      };
+      setMIDICalibrationState(next);
+      if (midiChannelRef.current === null) {
+        detectedMIDIChannelRef.current = null;
+        setMIDI((current) => ({ ...current, detectedChannel: null }));
+      }
+    }, MIDI_CALIBRATION_TIMEOUT_MS);
+  }, [clearMIDICalibrationTimer, releaseMIDINotes, setMIDICalibrationState]);
+
+  const resetMIDICalibration = useCallback(() => {
+    releaseMIDINotes();
+    clearMIDICalibrationCapture();
+    midiCalibrationSnapshotRef.current = null;
+    const inputId = selectedMIDIIdRef.current;
+    const next = { ...EMPTY_MIDI_CALIBRATION };
+    setMIDICalibrationState(next);
+    detectedMIDIChannelRef.current = null;
+    if (inputId) persistMIDICalibration(inputId, next);
+    setMIDI((current) => ({
+      ...current,
+      detectedChannel: null,
+      lastNote: null,
+      lastMappedNote: null,
+      lastVelocity: 0,
+      lastMessageInRange: null,
+      calibration: next,
+    }));
+  }, [clearMIDICalibrationCapture, releaseMIDINotes, setMIDICalibrationState]);
 
   const setBackingBandFrame = useCallback((active: boolean, energy = 0) => {
     backingBandActiveRef.current = active;
@@ -445,6 +702,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   }, []);
 
   const pause = useCallback(() => {
+    if (midiCalibrationRef.current.active) cancelMIDICalibration();
     const wasFinishing = isFinishingRef.current;
     isPlayingRef.current = false;
     isFinishingRef.current = false;
@@ -462,10 +720,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     lastMetronomeBeatRef.current = null;
     stopListenVoices();
     stopBackingBand(true);
-  }, [stopBackingBand, stopListenVoices]);
+  }, [cancelMIDICalibration, stopBackingBand, stopListenVoices]);
 
   const play = useCallback(() => {
     if (isPlayingRef.current) return;
+    if (midiCalibrationRef.current.active) cancelMIDICalibration();
     isFinishingRef.current = false;
     setIsFinishing(false);
     setSongComplete(false);
@@ -490,11 +749,22 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setCountdown(shouldCountIn ? PRE_ROLL_SECONDS : null);
     isPlayingRef.current = true;
     setIsPlaying(true);
-  }, [commitPosition, resetScore, song.bpm, song.durationBeats, stopBackingBand, synth]);
+  }, [
+    cancelMIDICalibration,
+    commitPosition,
+    resetScore,
+    song.bpm,
+    song.durationBeats,
+    stopBackingBand,
+    synth,
+  ]);
 
   const seekBeat = useCallback(
     (beat: number) => {
+      if (midiCalibrationRef.current.active) cancelMIDICalibration();
       const destination = clamp(beat, 0, song.durationBeats);
+      const movedToNewBeat =
+        Math.abs(destination - positionRef.current) > 0.000_001;
       stopListenVoices();
       stopBackingBand(true);
       isFinishingRef.current = false;
@@ -508,20 +778,14 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       preRollVisualBeatRef.current = destination;
       setCountdown(null);
       lastMetronomeBeatRef.current = null;
-      const reopenedResults = new Map(resultsRef.current);
-      for (const note of song.notes) {
-        if (note.startBeat >= destination) reopenedResults.delete(note.id);
-      }
-      resultsRef.current = reopenedResults;
-      setNoteResults(reopenedResults);
-      setLatestFeedback(null);
-      setFeedbackEvents([]);
+      if (movedToNewBeat) resetScore();
       commitPosition(destination);
     },
     [
       commitPosition,
+      cancelMIDICalibration,
+      resetScore,
       song.durationBeats,
-      song.notes,
       stopBackingBand,
       stopListenVoices,
     ],
@@ -666,18 +930,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setPressedNotes(new Set(heldSourcesRef.current.keys()));
   }, []);
 
-  const releaseHeldSources = useCallback((sourcePrefix: string) => {
-    for (const [midiNote, sources] of heldSourcesRef.current) {
-      for (const sourceId of [...sources]) {
-        if (!sourceId.startsWith(sourcePrefix)) continue;
-        synthRef.current?.noteOff(sourceId, undefined, 0.04);
-        sources.delete(sourceId);
-      }
-      if (sources.size === 0) heldSourcesRef.current.delete(midiNote);
-    }
-    setPressedNotes(new Set(heldSourcesRef.current.keys()));
-  }, []);
-
   noteOnRef.current = noteOn;
   noteOffRef.current = noteOff;
 
@@ -758,6 +1010,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   const setLoop = useCallback(
     (startBeat: number, endBeat: number, enabled = true) => {
+      if (midiCalibrationRef.current.active) cancelMIDICalibration();
       const start = clamp(startBeat, 0, Math.max(0, song.durationBeats - 0.25));
       const end = clamp(endBeat, start + 0.25, song.durationBeats);
       const nextLoop = { enabled, startBeat: start, endBeat: end };
@@ -768,10 +1021,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         seekBeat(start);
       }
     },
-    [seekBeat, song.durationBeats, stopBackingBand],
+    [cancelMIDICalibration, seekBeat, song.durationBeats, stopBackingBand],
   );
 
   const toggleLoop = useCallback(() => {
+    if (midiCalibrationRef.current.active) cancelMIDICalibration();
     const current = loopRef.current;
     const nextLoop = { ...current, enabled: !current.enabled };
     stopBackingBand(true);
@@ -784,18 +1038,82 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     ) {
       seekBeat(nextLoop.startBeat);
     }
-  }, [seekBeat, stopBackingBand]);
+  }, [cancelMIDICalibration, seekBeat, stopBackingBand]);
 
-  const resetMIDIActivity = useCallback(() => {
-    detectedMIDIChannelRef.current = null;
+  const startMIDICalibration = useCallback(() => {
+    if (!midiInputRef.current) {
+      setMIDI((current) => ({
+        ...current,
+        error: "Connect a MIDI input before aligning the keyboard.",
+      }));
+      return;
+    }
+
+    if (isPlayingRef.current) pause();
+    releaseMIDINotes();
+    clearMIDICalibrationCapture();
+    const previous = midiCalibrationRef.current;
+    if (!previous.active) {
+      midiCalibrationSnapshotRef.current = {
+        ...previous,
+        active: false,
+        phase: "idle",
+        error: null,
+      };
+    }
+    const next: KeyboardHeroMIDICalibrationState = {
+      ...EMPTY_MIDI_CALIBRATION,
+      active: true,
+      phase: "left",
+    };
+    setMIDICalibrationState(next);
+    if (midiChannelRef.current === null) {
+      detectedMIDIChannelRef.current = null;
+    }
     setMIDI((current) => ({
       ...current,
-      detectedChannel: null,
+      detectedChannel:
+        midiChannelRef.current === null ? null : current.detectedChannel,
       lastNote: null,
+      lastMappedNote: null,
       lastVelocity: 0,
       lastMessageInRange: null,
+      calibration: next,
+      error: null,
     }));
-  }, []);
+    armMIDICalibrationTimer();
+  }, [
+    armMIDICalibrationTimer,
+    clearMIDICalibrationCapture,
+    pause,
+    releaseMIDINotes,
+    setMIDICalibrationState,
+  ]);
+
+  const resetMIDIActivity = useCallback(
+    (inputId: string | null = null) => {
+      releaseMIDINotes();
+      clearMIDICalibrationCapture();
+      midiChannelRef.current = null;
+      detectedMIDIChannelRef.current = null;
+      midiCalibrationSnapshotRef.current = null;
+      const calibration = inputId
+        ? readMIDICalibration(inputId)
+        : { ...EMPTY_MIDI_CALIBRATION };
+      midiCalibrationRef.current = calibration;
+      setMIDI((current) => ({
+        ...current,
+        channel: null,
+        detectedChannel: null,
+        lastNote: null,
+        lastMappedNote: null,
+        lastVelocity: 0,
+        lastMessageInRange: null,
+        calibration,
+      }));
+    },
+    [clearMIDICalibrationCapture, releaseMIDINotes],
+  );
 
   const setMIDIChannel = useCallback(
     (channel: number | null) => {
@@ -805,23 +1123,33 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       ) {
         return;
       }
-      releaseHeldSources("midi:");
+      if (midiCalibrationRef.current.active) cancelMIDICalibration();
+      releaseMIDINotes();
       midiChannelRef.current = channel;
       detectedMIDIChannelRef.current = null;
+      const calibration = midiCalibrationRef.current;
       setMIDI((current) => ({
         ...current,
         channel,
         detectedChannel: null,
         lastNote: null,
+        lastMappedNote: null,
         lastVelocity: 0,
         lastMessageInRange: null,
+        calibration,
       }));
     },
-    [releaseHeldSources],
+    [cancelMIDICalibration, releaseMIDINotes],
   );
 
   const bindMIDIInput = useCallback((input: MIDIInputLike) => {
     input.onmidimessage = (event) => {
+      if (
+        midiInputRef.current !== input ||
+        selectedMIDIIdRef.current !== input.id
+      ) {
+        return;
+      }
       const [status = 0, note = 0, velocity = 0] = event.data;
       const command = status & 0xf0;
       const isNoteOn = command === 0x90 && velocity > 0;
@@ -829,21 +1157,228 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (!isNoteOn && !isNoteOff) return;
 
       const channel = status & 0x0f;
-      const inRange = note >= MIDI_MIN && note <= MIDI_MAX;
+      const calibration = midiCalibrationRef.current;
+      const transpose = calibration.calibrated ? calibration.transpose : 0;
+      const displayMappedNote = note + transpose;
+      const lastMappedNote =
+        !calibration.needsVerification &&
+        displayMappedNote >= 0 &&
+        displayMappedNote <= 127
+          ? displayMappedNote
+          : null;
+      const mappedNote = calibration.needsVerification
+        ? null
+        : mapMIDINoteToKeyboardRange(note, transpose);
+      const messageKey = `${input.id}:ch${channel}:raw${note}`;
       setMIDI((current) => ({
         ...current,
         lastNote: note,
+        lastMappedNote,
         lastVelocity: velocity,
-        lastMessageInRange: inRange,
+        lastMessageInRange: mappedNote !== null,
       }));
-      if (!inRange) return;
+
+      // Release the exact mapping captured by Note On before applying current
+      // channel or transpose gates; those settings may have changed meanwhile.
+      if (isNoteOff) {
+        const active = activeMIDINotesRef.current.get(messageKey);
+        if (active) {
+          activeMIDINotesRef.current.delete(messageKey);
+          noteOffRef.current(active.mappedNote, active.source);
+          return;
+        }
+      }
 
       const manualChannel = midiChannelRef.current;
       if (manualChannel !== null && channel !== manualChannel) return;
+      if (
+        manualChannel === null &&
+        detectedMIDIChannelRef.current !== null &&
+        channel !== detectedMIDIChannelRef.current
+      ) {
+        if (calibration.active && isNoteOn) {
+          clearMIDICalibrationCapture();
+          detectedMIDIChannelRef.current = null;
+          const next: KeyboardHeroMIDICalibrationState = {
+            ...EMPTY_MIDI_CALIBRATION,
+            active: true,
+            phase: "left",
+            error:
+              "The end keys arrived on different MIDI channels. Retry the leftmost key; avoid the drum pads.",
+          };
+          setMIDICalibrationState(next);
+          setMIDI((current) => ({
+            ...current,
+            detectedChannel: null,
+            calibration: next,
+          }));
+          armMIDICalibrationTimer();
+        }
+        return;
+      }
+
+      if (calibration.active) {
+        if (calibration.phase === "left" && isNoteOn) {
+          if (manualChannel === null) {
+            detectedMIDIChannelRef.current = channel;
+            setMIDI((current) => ({ ...current, detectedChannel: channel }));
+          }
+          const candidate: MIDICalibrationCandidate = {
+            key: messageKey,
+            rawNote: note,
+            channel,
+            invalid: false,
+          };
+          leftCalibrationCandidateRef.current = candidate;
+          const next: KeyboardHeroMIDICalibrationState = {
+            ...calibration,
+            phase: "release-left",
+            rawNote: note,
+            rightRawNote: null,
+            transpose: MIDI_MIN - note,
+            error: null,
+          };
+          midiCalibrationRef.current = next;
+          setMIDI((current) => ({
+            ...current,
+            calibration: next,
+            lastMappedNote: MIDI_MIN,
+            lastMessageInRange: true,
+          }));
+          armMIDICalibrationTimer();
+          return;
+        }
+
+        if (calibration.phase === "release-left") {
+          const candidate = leftCalibrationCandidateRef.current;
+          if (isNoteOn) {
+            if (candidate) candidate.invalid = true;
+            const next: KeyboardHeroMIDICalibrationState = {
+              ...calibration,
+              error:
+                "Multiple or repeated notes detected. Release all keys and retry the leftmost key.",
+            };
+            midiCalibrationRef.current = next;
+            setMIDI((current) => ({ ...current, calibration: next }));
+            return;
+          }
+          if (isNoteOff && candidate?.key === messageKey) {
+            leftCalibrationCandidateRef.current = null;
+            const next: KeyboardHeroMIDICalibrationState = candidate.invalid
+              ? {
+                  ...calibration,
+                  phase: "left",
+                  rawNote: null,
+                  rightRawNote: null,
+                  transpose: 0,
+                  error:
+                    "Extra notes were detected. Retry with only the physical leftmost key.",
+                }
+              : { ...calibration, phase: "right", error: null };
+            if (candidate.invalid && manualChannel === null) {
+              detectedMIDIChannelRef.current = null;
+            }
+            midiCalibrationRef.current = next;
+            setMIDI((current) => ({
+              ...current,
+              detectedChannel:
+                candidate.invalid && manualChannel === null
+                  ? null
+                  : current.detectedChannel,
+              calibration: next,
+            }));
+            armMIDICalibrationTimer();
+          }
+          return;
+        }
+
+        if (calibration.phase === "right" && isNoteOn) {
+          const leftRawNote = calibration.rawNote;
+          const candidate: MIDICalibrationCandidate = {
+            key: messageKey,
+            rawNote: note,
+            channel,
+            invalid:
+              leftRawNote === null ||
+              !isValidMIDICalibrationSpan(leftRawNote, note),
+          };
+          rightCalibrationCandidateRef.current = candidate;
+          const next: KeyboardHeroMIDICalibrationState = {
+            ...calibration,
+            phase: "release-right",
+            rightRawNote: note,
+            error: null,
+          };
+          midiCalibrationRef.current = next;
+          setMIDI((current) => ({ ...current, calibration: next }));
+          armMIDICalibrationTimer();
+          return;
+        }
+
+        if (calibration.phase === "release-right") {
+          const candidate = rightCalibrationCandidateRef.current;
+          if (isNoteOn) {
+            if (candidate) candidate.invalid = true;
+            const next: KeyboardHeroMIDICalibrationState = {
+              ...calibration,
+              error:
+                "Multiple or repeated notes detected. Release all keys and retry the rightmost key.",
+            };
+            midiCalibrationRef.current = next;
+            setMIDI((current) => ({ ...current, calibration: next }));
+            return;
+          }
+          if (!isNoteOff || candidate?.key !== messageKey) return;
+          rightCalibrationCandidateRef.current = null;
+          if (candidate.invalid || calibration.rawNote === null) {
+            const next: KeyboardHeroMIDICalibrationState = {
+              ...calibration,
+              active: true,
+              phase: "right",
+              rightRawNote: null,
+              error:
+                "The end keys must be exactly 24 semitones apart. Retry the physical rightmost key.",
+            };
+            midiCalibrationRef.current = next;
+            setMIDI((current) => ({
+              ...current,
+              calibration: next,
+              lastMappedNote: null,
+              lastMessageInRange: null,
+            }));
+            armMIDICalibrationTimer();
+            return;
+          }
+
+          const next: KeyboardHeroMIDICalibrationState = {
+            active: false,
+            calibrated: true,
+            needsVerification: false,
+            phase: "idle",
+            rawNote: calibration.rawNote,
+            rightRawNote: candidate.rawNote,
+            transpose: MIDI_MIN - calibration.rawNote,
+            error: null,
+          };
+          clearMIDICalibrationCapture();
+          midiCalibrationRef.current = next;
+          midiCalibrationSnapshotRef.current = null;
+          persistMIDICalibration(input.id, next);
+          setMIDI((current) => ({
+            ...current,
+            calibration: next,
+            lastMappedNote: MIDI_MAX,
+            lastMessageInRange: true,
+          }));
+          return;
+        }
+        return;
+      }
+
+      if (isNoteOff || mappedNote === null) return;
       if (manualChannel === null) {
         const detectedChannel = detectedMIDIChannelRef.current;
         if (detectedChannel === null) {
-          if (!isNoteOn) return;
           detectedMIDIChannelRef.current = channel;
           setMIDI((current) => ({ ...current, detectedChannel: channel }));
         } else if (channel !== detectedChannel) {
@@ -851,14 +1386,19 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         }
       }
 
-      const source = `midi:${input.id}:ch${channel}`;
-      if (isNoteOn) {
-        noteOnRef.current(note, velocity, source);
-      } else {
-        noteOffRef.current(note, source);
-      }
+      if (activeMIDINotesRef.current.has(messageKey)) return;
+      const source = `midi:${input.id}:ch${channel}:raw${note}`;
+      activeMIDINotesRef.current.set(messageKey, {
+        mappedNote,
+        source,
+      });
+      noteOnRef.current(mappedNote, velocity, source);
     };
-  }, []);
+  }, [
+    armMIDICalibrationTimer,
+    clearMIDICalibrationCapture,
+    setMIDICalibrationState,
+  ]);
 
   const refreshMIDIInputs = useCallback(() => {
     const access = midiAccessRef.current;
@@ -876,8 +1416,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     const previous = midiInputRef.current;
     if (previous !== (selected ?? null)) {
       if (previous) previous.onmidimessage = null;
-      releaseHeldSources("midi:");
-      resetMIDIActivity();
+      resetMIDIActivity(selected?.id ?? null);
     }
     midiInputRef.current = selected ?? null;
     if (selected) bindMIDIInput(selected);
@@ -887,7 +1426,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       selectedInputId: selected?.id ?? null,
       connectedName: selected?.name || null,
     }));
-  }, [bindMIDIInput, releaseHeldSources, resetMIDIActivity]);
+  }, [bindMIDIInput, resetMIDIActivity]);
 
   const selectMIDIInput = useCallback(
     (inputId: string | null) => {
@@ -896,14 +1435,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (previous) {
         previous.onmidimessage = null;
       }
-      if (inputChanged) {
-        releaseHeldSources("midi:");
-        resetMIDIActivity();
-      }
-      selectedMIDIIdRef.current = inputId;
       const input = Array.from(midiAccessRef.current?.inputs.values() ?? []).find(
         (candidate) => candidate.id === inputId && candidate.state === "connected",
       );
+      if (inputChanged) {
+        resetMIDIActivity(input?.id ?? null);
+      }
+      selectedMIDIIdRef.current = inputId;
       midiInputRef.current = input ?? null;
       if (input) bindMIDIInput(input);
       setMIDI((current) => ({
@@ -913,7 +1451,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         error: inputId && !input ? "That MIDI input is no longer connected." : null,
       }));
     },
-    [bindMIDIInput, releaseHeldSources, resetMIDIActivity],
+    [bindMIDIInput, resetMIDIActivity],
   );
 
   const connectMIDI = useCallback(async () => {
@@ -945,15 +1483,34 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const retainedInput = connectedInputs.find(
         (input) => input.id === selectedMIDIIdRef.current,
       );
-      const exactMPKInput = connectedInputs.find(
-        (input) => input.name?.trim().toLowerCase() === "mpk mini iv",
+      const inputName = (input: MIDIInputLike) =>
+        input.name?.trim().toLowerCase() ?? "";
+      const isControlPort = (input: MIDIInputLike) =>
+        /\b(daw|plugin|software control|control|din)\b/i.test(inputName(input));
+      const officialMPKInput = connectedInputs.find(
+        (input) =>
+          !isControlPort(input) &&
+          inputName(input).endsWith("mpk mini iv midi port"),
       );
-      const aliasedMPKInput = connectedInputs.find((input) => {
-        const name = input.name?.toLowerCase() ?? "";
-        return name.includes("mpk mini iv") || name.includes("mpk mini 4");
+      const exactMPKInput = connectedInputs.find(
+        (input) => inputName(input) === "mpk mini iv",
+      );
+      const performanceMPKInput = connectedInputs.find((input) => {
+        const name = inputName(input);
+        return (
+          !isControlPort(input) &&
+          (name.includes("mpk mini iv") || name.includes("mpk mini 4"))
+        );
       });
+      const nonControlInput = connectedInputs.find(
+        (input) => !isControlPort(input),
+      );
       const preferredInput =
-        retainedInput ?? exactMPKInput ?? aliasedMPKInput ?? connectedInputs[0];
+        retainedInput ??
+        officialMPKInput ??
+        exactMPKInput ??
+        performanceMPKInput ??
+        nonControlInput;
       if (preferredInput) selectMIDIInput(preferredInput.id);
     } catch (error) {
       setMIDI((current) => ({
@@ -1182,14 +1739,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           nextBeat = activeLoop.startBeat + (nextBeat - loopEnd);
           stopListenVoices();
           stopBackingBand(true);
-          const freshResults = new Map(resultsRef.current);
-          for (const note of song.notes) {
-            if (note.startBeat >= activeLoop.startBeat && note.startBeat < activeLoop.endBeat) {
-              freshResults.delete(note.id);
-            }
-          }
-          resultsRef.current = freshResults;
-          setNoteResults(freshResults);
+          if (currentSettings.practiceMode !== "listen") resetScore();
           lastMetronomeBeatRef.current = null;
         } else {
           if (currentSettings.practiceMode === "flow") {
@@ -1240,6 +1790,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     isPlaying,
     pause,
     registerResult,
+    resetScore,
     song,
     stopBackingBand,
     stopListenVoices,
@@ -1251,6 +1802,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     () => () => {
       if (midiInputRef.current) midiInputRef.current.onmidimessage = null;
       if (midiAccessRef.current) midiAccessRef.current.onstatechange = null;
+      if (midiCalibrationTimeoutRef.current !== null) {
+        clearTimeout(midiCalibrationTimeoutRef.current);
+      }
       void synthRef.current?.dispose();
     },
     [],
@@ -1302,6 +1856,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     connectMIDI,
     selectMIDIInput,
     setMIDIChannel,
+    startMIDICalibration,
+    cancelMIDICalibration,
+    resetMIDICalibration,
     noteOn,
     noteOff,
     resetScore,
