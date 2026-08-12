@@ -154,10 +154,20 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /showMutedPlayerPianoCue/);
   assert.match(page, /dialogRef\.current\?\.focus/);
   assert.match(page, /document\.body\.style\.overflow = "hidden"/);
+  assert.match(page, /input:not\(\[disabled\]\)/);
   assert.match(page, /dialog\.addEventListener\("keydown", handleDialogKeyDown\)/);
   assert.match(page, /returnFocus\.focus\(\{ preventScroll: true \}\)/);
   assert.match(page, /const openLibrary = useCallback/);
   assert.match(page, /pauseForLibrary\(\);[\s\S]*?setLibraryOpen\(true\)/);
+  assert.match(page, /function ChallengeSelector/);
+  assert.match(page, /<ChallengeSelector/);
+  assert.match(page, /SONG_FAMILIES\.length/);
+  assert.match(
+    page,
+    /const CAREER_VENUES = \[[\s\S]*?Garage Sessions[\s\S]*?Downtown Club[\s\S]*?Festival Stage[\s\S]*?Grand Theater[\s\S]*?Arena Headliner[\s\S]*?\] as const/,
+  );
+  assert.match(page, /const selectChallenge = useCallback/);
+  assert.match(page, /getSongChart\(selectedSongFamily, nextChallenge\)/);
   assert.match(
     page,
     /if \(libraryOpen \|\| trainingOpen \|\| songComplete\) return/,
@@ -214,7 +224,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /result\.grade === "miss"/);
   assert.match(page, /\["flow", "wait", "listen"\]/);
   assert.match(layout, /openGraph/);
-  assert.match(layout, /\/og-rock-v2\.png/);
+  assert.match(layout, /\/og-career\.png/);
   assert.match(packageJson, /"three"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(songs, /export const SONGS: Song\[]/);
@@ -360,7 +370,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /reconcileScheduledVoices/);
   assert.match(engine, /const tempoScale = clamp\(scale, 0\.25, 1\.25\)/);
 
-  await access(new URL("../public/og-rock-v2.png", import.meta.url));
+  await access(new URL("../public/og-career.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
 });
 

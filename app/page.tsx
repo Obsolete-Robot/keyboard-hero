@@ -45,12 +45,18 @@ import {
 } from "@/hooks/useKeyboardHeroCore";
 import { resolveMIDITransportIntent } from "@/lib/midiTransport";
 import {
-  SONGS,
   getSongDurationSeconds,
   midiToNoteName,
   type Song,
   type SongSection,
 } from "@/lib/songs";
+import {
+  CHALLENGE_LEVELS,
+  SONG_FAMILIES,
+  getSongChart,
+  type ChallengeLevel,
+  type SongFamily,
+} from "@/lib/songCatalog";
 import {
   TRAINING_LESSONS,
   TRAINING_SONGS,
@@ -62,7 +68,39 @@ import {
   type TrainingLesson,
 } from "@/lib/training";
 
-const PLAYABLE_SONGS: readonly Song[] = [...SONGS, ...TRAINING_SONGS];
+const DEFAULT_CHALLENGE_LEVEL: ChallengeLevel =
+  CHALLENGE_LEVELS[0] ?? "easy";
+const DEFAULT_SONG_FAMILY = SONG_FAMILIES[0];
+const DEFAULT_SONG = getSongChart(
+  DEFAULT_SONG_FAMILY,
+  DEFAULT_CHALLENGE_LEVEL,
+);
+
+const CHALLENGE_DETAILS: Record<
+  ChallengeLevel,
+  { label: string; shortDescription: string }
+> = {
+  easy: {
+    label: "Easy",
+    shortDescription: "One hand · melody-first",
+  },
+  medium: {
+    label: "Medium",
+    shortDescription: "Two hands · some chords",
+  },
+  hard: {
+    label: "Hard",
+    shortDescription: "Full chords · piano-style",
+  },
+};
+
+const CAREER_VENUES = [
+  "Garage Sessions",
+  "Downtown Club",
+  "Festival Stage",
+  "Grand Theater",
+  "Arena Headliner",
+] as const;
 
 function formatTime(seconds: number) {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
@@ -264,16 +302,60 @@ function Difficulty({ value }: { value: number }) {
   );
 }
 
+function ChallengeSelector({
+  value,
+  onChange,
+}: {
+  value: ChallengeLevel;
+  onChange: (challenge: ChallengeLevel) => void;
+}) {
+  return (
+    <fieldset className="challenge-picker">
+      <legend className="sr-only">Choose a challenge level</legend>
+      <div className="challenge-picker-copy" aria-hidden="true">
+        <span>Choose your chart</span>
+        <strong>{CHALLENGE_DETAILS[value].shortDescription}</strong>
+      </div>
+      <div className="challenge-segments">
+        {CHALLENGE_LEVELS.map((challenge) => (
+          <label className="challenge-option" key={challenge}>
+            <input
+              checked={challenge === value}
+              name="song-challenge"
+              onChange={() => onChange(challenge)}
+              type="radio"
+              value={challenge}
+            />
+            <span>{CHALLENGE_DETAILS[challenge].label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function SongLibrary({
-  activeSong,
+  activeFamilyId,
+  challengeLevel,
   onClose,
+  onChallengeChange,
   onSelect,
 }: {
-  activeSong: Song;
+  activeFamilyId: string;
+  challengeLevel: ChallengeLevel;
   onClose: () => void;
-  onSelect: (song: Song) => void;
+  onChallengeChange: (challenge: ChallengeLevel) => void;
+  onSelect: (family: SongFamily) => void;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
+  const careerTiers = [...new Set(SONG_FAMILIES.map((family) => family.careerTier))]
+    .sort((left, right) => left - right)
+    .map((tier) => ({
+      tier,
+      families: SONG_FAMILIES.filter((family) => family.careerTier === tier).sort(
+        (left, right) => left.courseRank - right.courseRank,
+      ),
+    }));
 
   useEffect(() => {
     const activeElement = document.activeElement;
@@ -308,16 +390,18 @@ function SongLibrary({
       }
       if (event.key !== "Tab") return;
 
-      const buttons = Array.from(
-        dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])"),
+      const focusableElements = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        ),
       );
-      if (buttons.length === 0) {
+      if (focusableElements.length === 0) {
         event.preventDefault();
         dialog.focus({ preventScroll: true });
         return;
       }
-      const first = buttons[0];
-      const last = buttons[buttons.length - 1];
+      const first = focusableElements[0];
+      const last = focusableElements[focusableElements.length - 1];
       if (
         event.shiftKey &&
         (document.activeElement === first || document.activeElement === dialog)
@@ -355,12 +439,15 @@ function SongLibrary({
       >
         <header className="modal-head">
           <div>
-            <div className="modal-kicker">10-level learning path</div>
-            <h2>Pick your next set.</h2>
+            <div className="modal-kicker">
+              {SONG_FAMILIES.length}-song world tour · 3 ways to play
+            </div>
+            <h2>Choose your next stage.</h2>
             <p>
-              Start with five notes, then work through two-hand independence,
-              chords, blues, arpeggios, and a full arena-style finale. Every
-              arrangement fits the MPK Mini&apos;s 25 keys.
+              Each challenge has its own complete {SONG_FAMILIES.length}-song
+              climb. Start with a one-hand melody, add the second hand and
+              chord hits, or take on the full piano-style chart—all within the
+              same 25 keys.
             </p>
           </div>
           <button
@@ -373,35 +460,73 @@ function SongLibrary({
           </button>
         </header>
 
-        <div className="song-grid">
-          {SONGS.map((song, index) => (
-            <button
-              className={`song-card${song.id === activeSong.id ? " selected" : ""}`}
-              key={song.id}
-              onClick={() => onSelect(song)}
-            >
-              <span className="song-card-index">
-                LEVEL {(index + 1).toString().padStart(2, "0")} · {song.style}
-              </span>
-              <h3>{song.title}</h3>
-              <div className="song-composer">
-                {song.subtitle} · {song.composer}
-              </div>
-              <Difficulty value={song.difficulty} />
-              <div className="skill-chips">
-                {song.skills.slice(0, 3).map((skill) => (
-                  <span className="skill-chip" key={skill}>
-                    {skill}
-                  </span>
-                ))}
-              </div>
-              <div className="song-card-footer">
-                <span>{song.bpm} BPM</span>
-                <span>{song.notes.length} notes</span>
-                <span>{song.sections.length} loops</span>
-              </div>
-            </button>
-          ))}
+        <ChallengeSelector
+          onChange={onChallengeChange}
+          value={challengeLevel}
+        />
+
+        <div className="song-library-scroll">
+          {careerTiers.map(({ tier, families }) => {
+            const firstRank = families[0]?.courseRank ?? 1;
+            const lastRank = families.at(-1)?.courseRank ?? firstRank;
+            return (
+              <section className="career-tier" key={tier}>
+                <header className="career-tier-head">
+                  <div>
+                    <span>Venue {tier} of {careerTiers.length}</span>
+                    <h3>{CAREER_VENUES[tier - 1] ?? `Tour Stop ${tier}`}</h3>
+                  </div>
+                  <p>
+                    Songs {String(firstRank).padStart(2, "0")}–
+                    {String(lastRank).padStart(2, "0")} · The set gets tougher
+                    from left to right.
+                  </p>
+                </header>
+                <div className="song-grid">
+                  {families.map((family) => {
+                    const chart = getSongChart(family, challengeLevel);
+                    return (
+                      <button
+                        aria-label={`Play ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}`}
+                        aria-pressed={family.id === activeFamilyId}
+                        className={`song-card${
+                          family.id === activeFamilyId ? " selected" : ""
+                        }`}
+                        key={family.id}
+                        onClick={() => onSelect(family)}
+                        type="button"
+                      >
+                        <span className="song-card-index">
+                          SONG {String(family.courseRank).padStart(2, "0")} · {family.style}
+                        </span>
+                        <span className="song-card-challenge">
+                          {CHALLENGE_DETAILS[challengeLevel].label}
+                        </span>
+                        <h4>{family.title}</h4>
+                        <div className="song-composer">
+                          {family.subtitle ? `${family.subtitle} · ` : ""}
+                          {family.composer}
+                        </div>
+                        <Difficulty value={chart.difficulty} />
+                        <div className="skill-chips">
+                          {chart.skills.slice(0, 3).map((skill) => (
+                            <span className="skill-chip" key={skill}>
+                              {skill}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="song-card-footer">
+                          <span>{family.bpm} BPM</span>
+                          <span>{chart.notes.length} notes</span>
+                          <span>{chart.sections.length} loops</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
         </div>
       </section>
     </div>
@@ -409,7 +534,11 @@ function SongLibrary({
 }
 
 export default function Home() {
-  const [songId, setSongId] = useState(SONGS[0].id);
+  const [songFamilyId, setSongFamilyId] = useState(DEFAULT_SONG_FAMILY.id);
+  const [challengeLevel, setChallengeLevel] = useState<ChallengeLevel>(
+    DEFAULT_CHALLENGE_LEVEL,
+  );
+  const [songId, setSongId] = useState(DEFAULT_SONG.id);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [trainingOpen, setTrainingOpen] = useState(false);
   const [trainingSectionId, setTrainingSectionId] = useState<string | null>(null);
@@ -421,10 +550,21 @@ export default function Home() {
   } | null>(null);
   const closeLibrary = useCallback(() => setLibraryOpen(false), []);
   const closeTraining = useCallback(() => setTrainingOpen(false), []);
+  const selectedSongFamily = useMemo(
+    () =>
+      SONG_FAMILIES.find((family) => family.id === songFamilyId) ??
+      DEFAULT_SONG_FAMILY,
+    [songFamilyId],
+  );
+  const regularSong = useMemo(
+    () => getSongChart(selectedSongFamily, challengeLevel),
+    [challengeLevel, selectedSongFamily],
+  );
   const song = useMemo(
     () =>
-      PLAYABLE_SONGS.find((candidate) => candidate.id === songId) ?? SONGS[0],
-    [songId],
+      TRAINING_SONGS.find((candidate) => candidate.id === songId) ??
+      regularSong,
+    [regularSong, songId],
   );
   const songFingering = useMemo(() => buildSongFingeringGuide(song), [song]);
   const activeTrainingLesson = useMemo(
@@ -449,7 +589,7 @@ export default function Home() {
   const isFinishing = hero.isFinishing;
   const songComplete = hero.songComplete;
   const positionBeatRef = useRef(hero.positionBeat);
-  const lastRegularSongIdRef = useRef(SONGS[0].id);
+  const lastRegularSongIdRef = useRef(DEFAULT_SONG.id);
   const trainingReturnBackingBandRef = useRef(
     hero.settings.backingBandEnabled,
   );
@@ -1062,19 +1202,47 @@ export default function Home() {
     setPendingTrainingSetup(null);
   }, [pauseForLibrary, setBackingBandForTraining]);
 
+  const selectChallenge = useCallback(
+    (nextChallenge: ChallengeLevel) => {
+      if (nextChallenge === challengeLevel) return;
+      pauseForLibrary();
+      const nextSong = getSongChart(selectedSongFamily, nextChallenge);
+      setChallengeLevel(nextChallenge);
+      lastRegularSongIdRef.current = nextSong.id;
+      if (!activeTrainingLesson) {
+        setSongId(nextSong.id);
+        setTrainingSectionId(null);
+        setPendingTrainingSetup(null);
+      }
+    },
+    [
+      activeTrainingLesson,
+      challengeLevel,
+      pauseForLibrary,
+      selectedSongFamily,
+    ],
+  );
+
   const selectSong = useCallback(
-    (nextSong: Song) => {
+    (nextFamily: SongFamily) => {
       pauseForLibrary();
       if (activeTrainingLesson) {
         setBackingBandForTraining(trainingReturnBackingBandRef.current);
       }
+      const nextSong = getSongChart(nextFamily, challengeLevel);
+      setSongFamilyId(nextFamily.id);
       lastRegularSongIdRef.current = nextSong.id;
       setSongId(nextSong.id);
       setTrainingSectionId(null);
       setPendingTrainingSetup(null);
       setLibraryOpen(false);
     },
-    [activeTrainingLesson, pauseForLibrary, setBackingBandForTraining],
+    [
+      activeTrainingLesson,
+      challengeLevel,
+      pauseForLibrary,
+      setBackingBandForTraining,
+    ],
   );
 
   const selectTrainingSection = useCallback(
@@ -1189,7 +1357,10 @@ export default function Home() {
             </div>
             <div className="song-selector-title">{song.title}</div>
             <div className="song-selector-meta">
-              {song.level} · {song.key} · {song.timeSignature[0]}/{song.timeSignature[1]}
+              {song.level} · {!activeTrainingLesson && (
+                <>{CHALLENGE_DETAILS[challengeLevel].label} · </>
+              )}
+              {song.key} · {song.timeSignature[0]}/{song.timeSignature[1]}
             </div>
           </div>
           <button className="library-button" onClick={openLibrary}>
@@ -2192,8 +2363,10 @@ export default function Home() {
 
       {libraryOpen && (
         <SongLibrary
-          activeSong={song}
+          activeFamilyId={selectedSongFamily.id}
+          challengeLevel={challengeLevel}
           onClose={closeLibrary}
+          onChallengeChange={selectChallenge}
           onSelect={selectSong}
         />
       )}

@@ -31,7 +31,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const origin = `${protocol}://${host}`;
   const title = "Keyboard Hero — Learn Piano Like a Headliner";
   const description =
-    "A MIDI-powered piano trainer with falling notes, practice loops, adaptive tempo, and a concert-stage feel.";
+    "A MIDI-powered piano trainer with 35 songs, Easy through Hard arrangements, practice loops, and a concert-stage feel.";
 
   return {
     metadataBase: new URL(origin),
@@ -44,10 +44,10 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: "Keyboard Hero",
       images: [
         {
-          url: `${origin}/og-rock-v2.png`,
+          url: `${origin}/og-career.png`,
           width: 1731,
-          height: 908,
-          alt: "Keyboard Hero — Learn the notes. Feel the stage.",
+          height: 909,
+          alt: "Keyboard Hero — 35 songs with Easy, Medium, and Hard arrangements.",
         },
       ],
     },
@@ -55,7 +55,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      images: [`${origin}/og-rock-v2.png`],
+      images: [`${origin}/og-career.png`],
     },
   };
 }

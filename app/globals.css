@@ -3192,15 +3192,147 @@ kbd {
   }
 }
 
-.song-grid {
-  overflow: auto;
+.challenge-picker {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 13px 18px;
+  border: 0;
+  border-top: 1px solid rgba(243, 239, 227, 0.1);
+  border-bottom: 1px solid rgba(243, 239, 227, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  background:
+    linear-gradient(90deg, rgba(141, 104, 255, 0.12), transparent 42%),
+    #101016;
+}
+
+.challenge-picker-copy {
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding: 12px;
+  gap: 4px;
+}
+
+.challenge-picker-copy span {
+  color: var(--acid);
+  font: 850 8px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.challenge-picker-copy strong {
+  overflow: hidden;
+  color: rgba(243, 239, 227, 0.72);
+  font: 500 10px/1.2 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.challenge-segments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(84px, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(243, 239, 227, 0.14);
+  background: #07070b;
+}
+
+.challenge-option {
+  position: relative;
+  cursor: pointer;
+}
+
+.challenge-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.challenge-option span {
+  min-height: 32px;
+  padding: 0 12px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  color: rgba(243, 239, 227, 0.58);
+  background: transparent;
+  font: 850 9px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.challenge-option:hover span {
+  color: var(--ink);
+  background: rgba(243, 239, 227, 0.06);
+}
+
+.challenge-option input:focus-visible + span {
+  outline: 2px solid var(--paper);
+  outline-offset: 2px;
+}
+
+.challenge-option input:checked + span {
+  border-color: var(--acid);
+  color: var(--paper-ink);
+  background: var(--acid);
+}
+
+.song-library-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 18px 12px 24px;
   background:
     repeating-linear-gradient(112deg, transparent 0 34px, rgba(255, 255, 255, 0.018) 35px 36px),
     #08080c;
+}
+
+.career-tier + .career-tier {
+  margin-top: 26px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(243, 239, 227, 0.13);
+}
+
+.career-tier-head {
+  margin: 0 8px 11px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.career-tier-head span {
+  color: var(--violet);
+  font: 850 8px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.career-tier-head h3 {
+  margin: 5px 0 0;
+  color: var(--ink);
+  font: 400 26px/0.9 var(--font-display);
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.career-tier-head p {
+  max-width: 360px;
+  margin: 0;
+  color: rgba(243, 239, 227, 0.46);
+  font: 8px/1.45 var(--font-mono);
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.song-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .song-card {
@@ -3246,10 +3378,23 @@ kbd {
   text-transform: uppercase;
 }
 
-.song-card h3 {
+.song-card h4 {
   margin: 13px 0 0;
   font: 400 30px/0.86 var(--font-display);
   letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.song-card-challenge {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  padding: 4px 6px 3px;
+  border: 1px solid rgba(215, 255, 63, 0.42);
+  color: var(--acid);
+  background: rgba(7, 7, 11, 0.76);
+  font: 850 7px/1 var(--font-mono);
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
@@ -5038,6 +5183,44 @@ kbd {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .challenge-picker {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding: 11px 12px;
+  }
+
+  .challenge-picker-copy {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .challenge-picker-copy strong {
+    text-align: right;
+  }
+
+  .challenge-segments {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .song-library-scroll {
+    padding: 14px 10px 22px;
+  }
+
+  .career-tier-head {
+    margin-inline: 4px;
+    align-items: start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .career-tier-head p {
+    max-width: none;
+    text-align: left;
+  }
+
   .modal-backdrop {
     padding: 10px;
   }
@@ -5050,7 +5233,7 @@ kbd {
     font-size: clamp(40px, 14vw, 56px);
   }
 
-  .song-card h3 {
+  .song-card h4 {
     font-size: 27px;
   }
 

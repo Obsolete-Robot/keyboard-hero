@@ -23,7 +23,10 @@ with number/letter keys between them for the black notes.
 
 - Six-step beginner training room for finger placement, first chords, and a
   slow two-hand bridge into Frere Jacques
-- Ten original or public-domain lessons from first notes to two-hand arpeggios
+- A 35-song, five-venue career made from original and public-domain music
+- Easy, Medium, and Hard arrangements for every song: one-hand melody,
+  two-hand accompaniment with occasional chords, and full piano-style voicings
+- A Guitar Hero-style learning curve that grows within every challenge level
 - Flow, Wait, and Listen modes
 - Tempo control from 25% to 125% without changing pitch
 - Rewind, section loops, and custom A/B loop points
