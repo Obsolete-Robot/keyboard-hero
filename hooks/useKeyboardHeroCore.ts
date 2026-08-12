@@ -26,7 +26,6 @@ import {
   type MIDITransportAction,
 } from "@/lib/midiTransport";
 import {
-  advancePowerMode,
   applyPowerJudgement,
   authoredChordGroupId,
   completePowerMode,
@@ -711,13 +710,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     }
   }, []);
 
-  const advancePowerByBeats = useCallback(
-    (beats: number) => {
-      commitPower(advancePowerMode(powerRef.current, beats));
-    },
-    [commitPower],
-  );
-
   const finishPower = useCallback(() => {
     commitPower(completePowerMode(powerRef.current));
   }, [commitPower]);
@@ -1042,7 +1034,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   );
 
   const clearAttempt = useCallback(
-    (preservePower: boolean) => {
+    (preservePower: boolean, preserveScore = false) => {
       clearPlayerNoteAttempts();
       resultsRef.current = new Map();
       setNoteResults(new Map());
@@ -1051,8 +1043,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       setLatestSustainFeedback(null);
       setSustainFeedbackEvents([]);
       chordScoreMultipliersRef.current.clear();
-      scoreRef.current = EMPTY_SCORE;
-      setScore(EMPTY_SCORE);
+      if (!preserveScore) {
+        scoreRef.current = EMPTY_SCORE;
+        setScore(EMPTY_SCORE);
+      }
       if (!preservePower) resetPower();
     },
     [clearPlayerNoteAttempts, resetPower],
@@ -1060,7 +1054,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   const resetScore = useCallback(() => clearAttempt(false), [clearAttempt]);
   const resetAttemptForLoop = useCallback(
-    () => clearAttempt(true),
+    // A loop wrap makes its authored notes playable again without breaking the
+    // player's live streak or the Power Mode that streak earned.
+    () => clearAttempt(true, true),
     [clearAttempt],
   );
 
@@ -2628,7 +2624,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const activeLoop = loopRef.current;
       const loopEnd = activeLoop.enabled ? activeLoop.endBeat : song.durationBeats;
       let waitBlocked = false;
-      let loopWrapped = false;
 
       if (currentSettings.practiceMode === "wait") {
         const blockingBeat = song.notes
@@ -2698,17 +2693,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         playMetronomeSafely(beatNumber % song.timeSignature[0] === 0);
       }
 
-      const powerBeatsThisFrame = Math.max(
-        0,
-        Math.min(nextBeat, loopEnd) - oldBeat,
-      );
-      const loopPowerBeatsThisFrame = Math.max(0, nextBeat - oldBeat);
-
       if (nextBeat >= loopEnd) {
         const shouldQuickLoop =
           quickLoopEnabledRef.current && !activeLoop.enabled;
         if (activeLoop.enabled || shouldQuickLoop) {
-          loopWrapped = true;
           nextBeat =
             (activeLoop.enabled ? activeLoop.startBeat : 0) +
             (nextBeat - loopEnd);
@@ -2719,7 +2707,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
               resetScore();
             } else {
               resetAttemptForLoop();
-              advancePowerByBeats(loopPowerBeatsThisFrame);
             }
           }
           lastMetronomeBeatRef.current = null;
@@ -2740,9 +2727,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
               });
             }
           }
-          if (currentSettings.practiceMode !== "listen") {
-            advancePowerByBeats(powerBeatsThisFrame);
-          }
           commitPosition(song.durationBeats);
           stopListenVoices();
           stopBackingBand(false);
@@ -2761,14 +2745,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         }
       }
 
-      if (
-        !loopWrapped &&
-        !quickLoopEnabledRef.current &&
-        currentSettings.practiceMode !== "listen"
-      ) {
-        advancePowerByBeats(powerBeatsThisFrame);
-      }
-
       if (waitBlocked) {
         if (backingBandActiveRef.current) stopBackingBand(true);
       } else {
@@ -2781,7 +2757,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
   }, [
-    advancePowerByBeats,
     commitPosition,
     finishPower,
     isPlaying,

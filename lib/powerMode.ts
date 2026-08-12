@@ -4,10 +4,6 @@ export interface KeyboardHeroPowerState {
   /** Earned meter fill. Remains full while POWER MODE is active. */
   charge: number;
   active: boolean;
-  /** Normalized elapsed portion of the current POWER MODE. */
-  progress: number;
-  remainingBeats: number;
-  durationBeats: number;
   multiplier: number;
   /** Normalized presentation/audio intensity. */
   energy: number;
@@ -20,7 +16,6 @@ export interface PowerJudgementOutcome {
   activated: boolean;
 }
 
-export const POWER_MODE_DURATION_BEATS = 8;
 export const POWER_MODE_SCORE_MULTIPLIER = 2;
 const POWER_CHARGE_EPSILON = 0.000_000_001;
 
@@ -55,9 +50,6 @@ export function createPowerModeState(): KeyboardHeroPowerState {
   return {
     charge: 0,
     active: false,
-    progress: 0,
-    remainingBeats: 0,
-    durationBeats: POWER_MODE_DURATION_BEATS,
     multiplier: 1,
     energy: 0,
     activations: 0,
@@ -75,8 +67,6 @@ export function completePowerMode(
     ...current,
     charge: 0,
     active: false,
-    progress: current.active ? 1 : 0,
-    remainingBeats: 0,
     multiplier: 1,
     energy: 0,
   };
@@ -130,8 +120,6 @@ export function applyPowerJudgement(
         ...current,
         charge: 0,
         active: false,
-        progress: 0,
-        remainingBeats: 0,
         multiplier: 1,
         energy: 0,
       },
@@ -140,6 +128,8 @@ export function applyPowerJudgement(
   }
 
   if (current.active) {
+    // Power is tied to the live combo, not a transport timer. Every successful
+    // judgement keeps it fully active until a miss breaks the streak.
     return {
       state: { ...current, energy: 1 },
       activated: false,
@@ -152,7 +142,6 @@ export function applyPowerJudgement(
       state: {
         ...current,
         charge,
-        progress: 0,
         energy: charge,
       },
       activated: false,
@@ -164,49 +153,10 @@ export function applyPowerJudgement(
       ...current,
       charge: 1,
       active: true,
-      progress: 0,
-      remainingBeats: POWER_MODE_DURATION_BEATS,
-      durationBeats: POWER_MODE_DURATION_BEATS,
       multiplier: POWER_MODE_SCORE_MULTIPLIER,
       energy: 1,
       activations: current.activations + 1,
     },
     activated: true,
-  };
-}
-
-/** Advances POWER MODE in musical time, so pause and Wait mode freeze it. */
-export function advancePowerMode(
-  current: KeyboardHeroPowerState,
-  beatsAdvanced: number,
-): KeyboardHeroPowerState {
-  if (
-    !current.active ||
-    !Number.isFinite(beatsAdvanced) ||
-    beatsAdvanced <= 0
-  ) {
-    return current;
-  }
-
-  const duration = Math.max(0.000_001, current.durationBeats);
-  const remainingBeats = Math.max(0, current.remainingBeats - beatsAdvanced);
-  if (remainingBeats <= 0.000_001) {
-    return {
-      ...current,
-      charge: 0,
-      active: false,
-      progress: 1,
-      remainingBeats: 0,
-      multiplier: 1,
-      energy: 0,
-    };
-  }
-
-  const progress = clamp01(1 - remainingBeats / duration);
-  return {
-    ...current,
-    progress,
-    remainingBeats,
-    energy: clamp01(0.72 + 0.28 * (remainingBeats / duration)),
   };
 }

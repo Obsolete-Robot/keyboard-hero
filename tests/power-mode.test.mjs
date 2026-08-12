@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  advancePowerMode,
   applyPowerJudgement,
   authoredChordGroupId,
   completePowerMode,
@@ -33,27 +32,20 @@ test("grade-weighted hits fill the meter and activate exactly once across a chor
   assert.equal(simultaneousChordTone.state.activations, 1);
 });
 
-test("POWER MODE advances in beats, expires finitely, and a miss cancels it", () => {
+test("POWER MODE stays active with an unbroken combo and a miss cancels it", () => {
   let power = createPowerModeState();
   for (let index = 0; index < 9; index += 1) {
     power = applyPowerJudgement(power, "perfect").state;
   }
 
-  const unchanged = advancePowerMode(power, 0);
-  assert.equal(unchanged, power, "paused and Wait transport do not consume power");
-
-  power = advancePowerMode(power, 3);
+  for (let index = 0; index < 32; index += 1) {
+    power = applyPowerJudgement(power, "great").state;
+  }
   assert.equal(power.active, true);
-  assert.equal(power.remainingBeats, 5);
-  assert.equal(power.progress, 3 / 8);
+  assert.equal(power.charge, 1);
+  assert.equal(power.multiplier, 2);
+  assert.equal(power.activations, 1);
 
-  power = advancePowerMode(power, 5);
-  assert.equal(power.active, false);
-  assert.equal(power.remainingBeats, 0);
-  assert.equal(power.progress, 1);
-  assert.equal(power.multiplier, 1);
-
-  power = applyPowerJudgement(createPowerModeState(), "great").state;
   power = applyPowerJudgement(power, "miss").state;
   assert.equal(power.charge, 0);
   assert.equal(power.active, false);

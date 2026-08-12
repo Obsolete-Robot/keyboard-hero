@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -85,6 +86,9 @@ export default function PerformanceResults({
   onReplay,
   onPractice,
 }: PerformanceResultsProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const fitFrameRef = useRef<HTMLDivElement>(null);
+  const fitScalerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const [reduceMotion] = useState(prefersReducedMotion);
   const [revealReady, setRevealReady] = useState(reduceMotion);
@@ -117,6 +121,76 @@ export default function PerformanceResults({
       }
     };
   }, [reduceMotion]);
+
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current;
+    const fitFrame = fitFrameRef.current;
+    const fitScaler = fitScalerRef.current;
+    const dialog = dialogRef.current;
+    if (!overlay || !fitFrame || !fitScaler || !dialog) return;
+
+    let resizeFrame = 0;
+
+    const resetFit = () => {
+      fitFrame.style.removeProperty("width");
+      fitFrame.style.removeProperty("height");
+      fitScaler.style.removeProperty("width");
+      fitScaler.style.removeProperty("--results-fit-scale");
+    };
+
+    const fitResultsSheet = () => {
+      if (window.matchMedia("(max-width: 640px)").matches) {
+        resetFit();
+        return;
+      }
+
+      const overlayStyle = window.getComputedStyle(overlay);
+      const horizontalPadding =
+        Number.parseFloat(overlayStyle.paddingLeft) +
+        Number.parseFloat(overlayStyle.paddingRight);
+      const verticalPadding =
+        Number.parseFloat(overlayStyle.paddingTop) +
+        Number.parseFloat(overlayStyle.paddingBottom);
+      const availableWidth = Math.max(1, overlay.clientWidth - horizontalPadding);
+      const availableHeight = Math.max(1, overlay.clientHeight - verticalPadding);
+      const naturalWidth = Math.min(880, availableWidth);
+
+      fitFrame.style.width = `${naturalWidth}px`;
+      fitFrame.style.height = "auto";
+      fitScaler.style.width = `${naturalWidth}px`;
+      fitScaler.style.setProperty("--results-fit-scale", "1");
+
+      const naturalHeight = dialog.offsetHeight;
+      const fitScale = Math.min(
+        1,
+        availableWidth / naturalWidth,
+        availableHeight / naturalHeight,
+      );
+
+      fitFrame.style.width = `${naturalWidth * fitScale}px`;
+      fitFrame.style.height = `${naturalHeight * fitScale}px`;
+      fitScaler.style.setProperty("--results-fit-scale", fitScale.toString());
+    };
+
+    const scheduleFit = () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(fitResultsSheet);
+    };
+
+    fitResultsSheet();
+    const resizeObserver = new ResizeObserver(scheduleFit);
+    resizeObserver.observe(overlay);
+    resizeObserver.observe(dialog);
+    window.visualViewport?.addEventListener("resize", scheduleFit);
+    void document.fonts?.ready.then(scheduleFit);
+
+    return () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeObserver.disconnect();
+      window.visualViewport?.removeEventListener("resize", scheduleFit);
+      resetFit();
+    };
+  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -163,16 +237,18 @@ export default function PerformanceResults({
     report.testScore === null ? "Demo run, not graded" : `${report.testScore} out of 100`;
 
   const resultSheet = (
-    <div className="performance-results-overlay">
-      <section
-        aria-describedby="performance-results-message"
-        aria-labelledby="performance-results-title"
-        aria-modal="true"
-        className={`performance-results-card result-${report.tone}`}
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
-      >
+    <div className="performance-results-overlay" ref={overlayRef}>
+      <div className="results-fit-frame" ref={fitFrameRef}>
+        <div className="results-fit-scaler" ref={fitScalerRef}>
+          <section
+            aria-describedby="performance-results-message"
+            aria-labelledby="performance-results-title"
+            aria-modal="true"
+            className={`performance-results-card result-${report.tone}`}
+            ref={dialogRef}
+            role="dialog"
+            tabIndex={-1}
+          >
         <div className="results-registration" aria-hidden="true" />
 
         <header className="results-sheet-header">
@@ -307,7 +383,9 @@ export default function PerformanceResults({
             ? ` ${report.missedOrUnplayed} notes were missed or unplayed.`
             : " Every note was completed."}
         </p>
-      </section>
+          </section>
+        </div>
+      </div>
     </div>
   );
 
