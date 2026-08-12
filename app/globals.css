@@ -561,6 +561,19 @@ input:focus-visible {
   clip-path: polygon(0 0, 100% 0, calc(100% - 18px) 100%, 0 100%);
 }
 
+.performance-hud.is-quick-loop .performance-score {
+  border-color: rgba(215, 255, 63, 0.5);
+}
+
+.performance-hud.is-quick-loop .performance-score::before {
+  background: linear-gradient(90deg, transparent, var(--acid), transparent);
+  box-shadow: 0 0 16px rgba(215, 255, 63, 0.42);
+}
+
+.performance-hud.is-quick-loop .performance-streak {
+  opacity: 0.5;
+}
+
 .performance-streak {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -752,6 +765,12 @@ input:focus-visible {
     0 0 22px rgba(255, 255, 255, 0.2),
     0 0 38px rgba(73, 231, 255, 0.12);
   animation: score-kick 360ms cubic-bezier(0.16, 1.2, 0.3, 1) both;
+}
+
+.performance-hud.is-quick-loop .score-value {
+  color: var(--acid);
+  font-size: clamp(25px, 2.7vw, 38px);
+  letter-spacing: 0.04em;
 }
 
 .score-delta {
@@ -1122,8 +1141,13 @@ input:focus-visible {
 }
 
 @keyframes power-stage-breathe {
-  from { opacity: 0.78; filter: saturate(1) brightness(0.98); }
+  from { opacity: 0.82; filter: saturate(1.04) brightness(1.01); }
   to { opacity: 1; filter: saturate(1.12) brightness(1.05); }
+}
+
+@keyframes power-stage-enter {
+  from { opacity: 0.36; filter: saturate(0.88) brightness(0.94); }
+  to { opacity: 0.82; filter: saturate(1.04) brightness(1.01); }
 }
 
 @keyframes power-meter-breathe {
@@ -1132,7 +1156,7 @@ input:focus-visible {
 }
 
 @keyframes power-meter-flow {
-  to { background-position: -180% 0; }
+  to { background-position: 0 -180%; }
 }
 
 .performance-results-overlay {
@@ -1795,6 +1819,12 @@ input:focus-visible {
   pointer-events: none;
 }
 
+.timeline-loop.is-quick-loop {
+  border-color: var(--acid);
+  background: rgba(215, 255, 63, 0.13);
+  box-shadow: inset 0 0 12px rgba(215, 255, 63, 0.08);
+}
+
 .timeline-marker {
   position: absolute;
   top: 8px;
@@ -1890,6 +1920,25 @@ input:focus-visible {
   border-color: var(--violet);
   background: rgba(141, 104, 255, 0.16);
   color: #bba9ff;
+}
+
+.quick-loop-button {
+  position: relative;
+}
+
+.quick-loop-button span {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  color: currentColor;
+  font: 800 9px/1 var(--font-mono);
+}
+
+.quick-loop-button.active {
+  border-color: var(--acid);
+  background: rgba(215, 255, 63, 0.14);
+  color: var(--acid);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.08), 0 0 14px rgba(215, 255, 63, 0.14);
 }
 
 .ab-button {

@@ -173,7 +173,17 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /total \+ event\.pointsAwarded/);
   assert.match(page, /Power Mode activated/);
   assert.match(page, /power-meter-track/);
+  assert.match(page, /Quick loop: restart the full song with no score/);
+  assert.match(page, /onClick=\{hero\.toggleQuickLoop\}/);
+  assert.match(page, /songComplete && !hero\.quickLoopEnabled/);
+  assert.match(page, /height: `\$\{powerMeterPercent\}%`/);
   assert.match(appCss, /\.power-meter\.is-active/);
+  assert.match(appCss, /grid-row: 1 \/ 4/);
+  assert.match(appCss, /transition: height 420ms/);
+  assert.match(appCss, /power-stage-enter 1100ms/);
+  assert.match(stage, /displayedPowerEnergy/);
+  assert.match(stageCss, /kh-stage-power-enter 950ms/);
+  assert.match(appCss, /\.timeline-loop\.is-quick-loop/);
   assert.match(appCss, /\.performance-miss-toast \{/);
   assert.match(appCss, /@keyframes miss-toast-slide/);
   assert.match(appCss, /power-stage-breathe/);
@@ -322,6 +332,9 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /pointsAwarded/);
   assert.match(engine, /powerActivation/);
   assert.match(engine, /groupId/);
+  assert.match(engine, /const scoringEnabled = !quickLoopEnabledRef\.current/);
+  assert.match(engine, /if \(activeLoop\.enabled \|\| shouldQuickLoop\)/);
+  assert.match(engine, /setQuickLoopEnabled/);
   assert.match(engine, /practiceMode === "listen" && !isPlayingRef\.current\) play\(\)/);
   assert.match(engine, /reconcileScheduledVoices/);
   assert.match(engine, /const tempoScale = clamp\(scale, 0\.25, 1\.25\)/);
