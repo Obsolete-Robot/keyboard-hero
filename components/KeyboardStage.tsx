@@ -1432,8 +1432,13 @@ export default function KeyboardStage({
       const rightY = (-strikeRight.y * 0.5 + 0.5) * viewportHeight;
       const projectedWidth = Math.hypot(rightX - leftX, rightY - leftY);
       const angle = Math.atan2(rightY - leftY, rightX - leftX);
+      const hasCachedTransform =
+        Number.isFinite(lastStrikeX) &&
+        Number.isFinite(lastStrikeY) &&
+        Number.isFinite(lastStrikeAngle);
 
       if (
+        !hasCachedTransform ||
         Math.abs(centerX - lastStrikeX) > 0.2 ||
         Math.abs(centerY - lastStrikeY) > 0.2 ||
         Math.abs(angle - lastStrikeAngle) > 0.0005
@@ -1445,7 +1450,10 @@ export default function KeyboardStage({
         lastStrikeY = centerY;
         lastStrikeAngle = angle;
       }
-      if (Math.abs(projectedWidth - lastStrikeWidth) > 0.2) {
+      if (
+        !Number.isFinite(lastStrikeWidth) ||
+        Math.abs(projectedWidth - lastStrikeWidth) > 0.2
+      ) {
         strikeZone.style.width = `${projectedWidth}px`;
         lastStrikeWidth = projectedWidth;
       }

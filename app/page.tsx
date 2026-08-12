@@ -220,12 +220,68 @@ function SongLibrary({
   onClose: () => void;
   onSelect: (song: Song) => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+
   useEffect(() => {
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+    const activeElement = document.activeElement;
+    const returnFocus =
+      activeElement instanceof HTMLElement && activeElement !== document.body
+        ? activeElement
+        : null;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousRootOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    dialogRef.current?.focus({ preventScroll: true });
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousRootOverflow;
+      if (returnFocus?.isConnected) {
+        returnFocus.focus({ preventScroll: true });
+      }
     };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const handleDialogKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const buttons = Array.from(
+        dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])"),
+      );
+      if (buttons.length === 0) {
+        event.preventDefault();
+        dialog.focus({ preventScroll: true });
+        return;
+      }
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || document.activeElement === dialog)
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last || document.activeElement === dialog)
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    dialog.addEventListener("keydown", handleDialogKeyDown);
+    return () => dialog.removeEventListener("keydown", handleDialogKeyDown);
   }, [onClose]);
 
   return (
@@ -240,7 +296,9 @@ function SongLibrary({
         aria-label="Song library"
         aria-modal="true"
         className="library-modal"
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
       >
         <header className="modal-head">
           <div>
@@ -252,7 +310,12 @@ function SongLibrary({
               arrangement fits the MPK Mini&apos;s 25 keys.
             </p>
           </div>
-          <button className="close-button" onClick={onClose} aria-label="Close song library">
+          <button
+            aria-label="Close song library"
+            className="close-button"
+            onClick={onClose}
+            type="button"
+          >
             <X size={17} />
           </button>
         </header>
@@ -295,11 +358,17 @@ function SongLibrary({
 export default function Home() {
   const [songId, setSongId] = useState(SONGS[0].id);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const closeLibrary = useCallback(() => setLibraryOpen(false), []);
   const song = useMemo(
     () => SONGS.find((candidate) => candidate.id === songId) ?? SONGS[0],
     [songId],
   );
   const hero = useKeyboardHeroCore(song);
+  const pauseForLibrary = hero.pause;
+  const openLibrary = useCallback(() => {
+    pauseForLibrary();
+    setLibraryOpen(true);
+  }, [pauseForLibrary]);
   const isFinishing = hero.isFinishing;
   const songComplete = hero.songComplete;
   const positionBeatRef = useRef(hero.positionBeat);
@@ -313,7 +382,7 @@ export default function Home() {
 
   useEffect(() => {
     const handleTransportKeys = (event: globalThis.KeyboardEvent) => {
-      if (songComplete) return;
+      if (libraryOpen || songComplete) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -338,7 +407,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", handleTransportKeys);
     return () => window.removeEventListener("keydown", handleTransportKeys);
-  }, [rewindFromKey, seekFromKey, songComplete, togglePlayFromKey]);
+  }, [libraryOpen, rewindFromKey, seekFromKey, songComplete, togglePlayFromKey]);
 
   const activeSection = currentSection(song, hero.positionBeat);
   const nextNote = nextSongNote(song, hero.positionBeat);
@@ -564,7 +633,7 @@ export default function Home() {
               {song.level} · {song.key} · {song.timeSignature[0]}/{song.timeSignature[1]}
             </div>
           </div>
-          <button className="library-button" onClick={() => setLibraryOpen(true)}>
+          <button className="library-button" onClick={openLibrary}>
             Library <ChevronDown size={11} aria-hidden="true" />
           </button>
         </div>
@@ -1433,14 +1502,14 @@ export default function Home() {
             The full game still works with your computer keyboard. For the MPK Mini,
             open this page in a browser with Web MIDI support and click Connect MIDI.
           </p>
-          <button onClick={() => setLibraryOpen(true)}>Browse lessons</button>
+          <button onClick={openLibrary}>Browse lessons</button>
         </div>
       )}
 
       {libraryOpen && (
         <SongLibrary
           activeSong={song}
-          onClose={() => setLibraryOpen(false)}
+          onClose={closeLibrary}
           onSelect={selectSong}
         />
       )}

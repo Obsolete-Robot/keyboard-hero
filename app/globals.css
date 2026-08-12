@@ -69,6 +69,7 @@ body {
   color: var(--ink);
   font-family: var(--font-sans);
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
 button,
@@ -95,9 +96,16 @@ input:focus-visible {
 }
 
 .app-shell {
+  --arena-header-height: clamp(58px, 9vh, 70px);
+  --arena-header-height: clamp(58px, 9dvh, 70px);
+  --arena-transport-height: clamp(124px, 18vh, 148px);
+  --arena-transport-height: clamp(124px, 18dvh, 148px);
+  --arena-primary-width: min(100%, 129vh, 1280px);
+  --arena-primary-width: min(100%, 129dvh, 1280px);
   position: relative;
   min-height: 100vh;
-  overflow: hidden;
+  min-height: 100dvh;
+  overflow: visible;
 }
 
 .app-shell::before {
@@ -115,7 +123,7 @@ input:focus-visible {
 }
 
 .topbar {
-  min-height: 74px;
+  min-height: var(--arena-header-height);
   display: grid;
   grid-template-columns: minmax(248px, 1fr) minmax(330px, auto) minmax(248px, 1fr);
   align-items: center;
@@ -342,7 +350,8 @@ input:focus-visible {
 
 .main-grid {
   width: min(1780px, 100%);
-  min-height: calc(100vh - 74px);
+  min-height: calc(100vh - var(--arena-header-height));
+  min-height: calc(100dvh - var(--arena-header-height));
   margin: 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 310px;
@@ -353,17 +362,28 @@ input:focus-visible {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: center;
   border-right: 1px solid var(--line);
+  background: rgba(5, 5, 9, 0.76);
 }
 
 .stage-wrap {
   position: relative;
-  min-height: 520px;
-  height: calc(100vh - 258px);
+  width: var(--arena-primary-width);
+  min-height: 0;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  flex: 0 0 auto;
   overflow: hidden;
   background: #050509;
   container-name: performance-stage;
   container-type: inline-size;
+}
+
+.stage-wrap > .kh-stage {
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
 }
 
 .stage-wrap::before {
@@ -398,9 +418,9 @@ input:focus-visible {
 .stage-head {
   position: absolute;
   z-index: 12;
-  top: 18px;
-  right: 20px;
-  left: 20px;
+  top: 10px;
+  right: 16px;
+  left: 16px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -414,12 +434,12 @@ input:focus-visible {
   align-items: center;
   gap: 8px;
   max-width: min(540px, 68%);
-  padding: 8px 13px 7px 30px;
+  padding: 6px 12px 6px 28px;
   color: var(--paper-ink);
   background: rgba(241, 236, 223, 0.93);
   box-shadow: 5px 5px 0 rgba(215, 255, 63, 0.72), 0 12px 26px rgba(0, 0, 0, 0.22);
   clip-path: polygon(6px 0, 100% 0, calc(100% - 8px) 100%, 0 100%, 0 6px);
-  font: 750 9px/1 var(--font-mono);
+  font: 750 8px/1 var(--font-mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   transform: rotate(-0.45deg);
@@ -444,8 +464,8 @@ input:focus-visible {
 }
 
 .stage-metric {
-  min-width: 72px;
-  padding: 8px 10px 7px;
+  min-width: 64px;
+  padding: 6px 9px 6px;
   border: 1px solid rgba(215, 255, 63, 0.42);
   background: rgba(5, 5, 8, 0.8);
   box-shadow: 3px 3px 0 rgba(141, 104, 255, 0.45);
@@ -456,16 +476,16 @@ input:focus-visible {
 .stage-metric strong {
   display: block;
   color: var(--ink);
-  font: 400 27px/0.78 var(--font-display);
+  font: 400 21px/0.78 var(--font-display);
   letter-spacing: -0.06em;
   text-shadow: 0 0 24px rgba(255, 255, 255, 0.22);
 }
 
 .stage-metric span {
   display: block;
-  margin-top: 5px;
+  margin-top: 3px;
   color: var(--acid);
-  font: 8px/1 var(--font-mono);
+  font: 7px/1 var(--font-mono);
   letter-spacing: 0.11em;
   text-transform: uppercase;
 }
@@ -1626,8 +1646,10 @@ input:focus-visible {
 }
 
 .transport {
-  min-height: 184px;
-  padding: 16px 22px 18px;
+  width: var(--arena-primary-width);
+  min-height: var(--arena-transport-height);
+  flex: 0 0 auto;
+  padding: 7px clamp(12px, 1.6vw, 22px) 8px;
   border-top: 2px solid rgba(243, 239, 227, 0.16);
   background:
     repeating-linear-gradient(112deg, transparent 0 30px, rgba(255, 255, 255, 0.018) 31px 32px),
@@ -1723,13 +1745,14 @@ input:focus-visible {
 .section-labels {
   display: flex;
   gap: 4px;
-  margin: 7px 60px 0;
+  margin: 2px 60px 0;
   overflow: hidden;
 }
 
 .section-pill {
   min-width: 0;
-  padding: 6px 7px 5px;
+  min-height: 20px;
+  padding: 4px 7px 3px;
   border: 0;
   border-top: 1px solid var(--line);
   background: transparent;
@@ -1750,11 +1773,11 @@ input:focus-visible {
 }
 
 .transport-controls {
-  margin-top: 13px;
+  margin-top: 4px;
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
   align-items: center;
-  gap: 18px;
+  gap: clamp(8px, 1.3vw, 18px);
 }
 
 .transport-cluster {
@@ -1803,8 +1826,8 @@ input:focus-visible {
 }
 
 .play-button {
-  width: 58px;
-  height: 58px;
+  width: 52px;
+  height: 52px;
   border-color: var(--acid);
   border-radius: 0;
   background: var(--acid);
@@ -1853,7 +1876,8 @@ input:focus-visible {
 
 .coach-panel {
   min-width: 0;
-  max-height: calc(100vh - 74px);
+  max-height: calc(100vh - var(--arena-header-height));
+  max-height: calc(100dvh - var(--arena-header-height));
   overflow-y: auto;
   border-left: 2px solid rgba(215, 255, 63, 0.32);
   background:
@@ -2857,6 +2881,7 @@ kbd {
 
 .modal-head {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
@@ -2894,14 +2919,41 @@ kbd {
 }
 
 .close-button {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   border: 1px solid rgba(9, 9, 12, 0.42);
   background: var(--paper-ink);
   color: var(--paper);
   cursor: pointer;
   font-size: 19px;
+}
+
+@media (min-width: 641px) and (max-height: 688px) {
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .library-modal {
+    max-height: calc(100dvh - 24px);
+  }
+
+  .modal-head {
+    gap: 14px;
+    padding: 14px 18px 13px;
+  }
+
+  .modal-head h2 {
+    margin-top: 6px;
+    font-size: clamp(36px, 7dvh, 50px);
+  }
+
+  .modal-head p {
+    max-width: 680px;
+    margin-top: 6px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
 }
 
 .song-grid {
@@ -3074,6 +3126,31 @@ kbd {
 /* The coach column can make the stage narrow while the viewport is still
    desktop-sized, so these rules key off the actual playable canvas width. */
 @container performance-stage (max-width: 760px) {
+  .stage-head {
+    top: 8px;
+    right: 10px;
+    left: 10px;
+  }
+
+  .lesson-tag {
+    max-width: 58%;
+    padding-block: 5px;
+  }
+
+  .stage-metric {
+    min-width: 56px;
+    padding: 4px 7px;
+  }
+
+  .stage-metric strong {
+    font-size: 18px;
+  }
+
+  .stage-metric span {
+    margin-top: 2px;
+    font-size: 6px;
+  }
+
   .performance-hud {
     top: 48px;
     right: 12px;
@@ -3184,6 +3261,25 @@ kbd {
   }
 }
 
+@media (min-width: 881px) and (max-height: 644px) {
+  .app-shell {
+    /* At this height both clamps sit at 58px + 124px. This is the exact
+       16:9 width for the remaining block budget:
+       (100dvh - 182px) * 16 / 9, expanded for broad calc() support. */
+    --arena-primary-width: min(100%, max(568.89px, calc(177.7778vh - 323.56px)), 1280px);
+    --arena-primary-width: min(100%, max(568.89px, calc(177.7778dvh - 323.56px)), 1280px);
+  }
+}
+
+@media (min-width: 881px) and (min-height: 645px) and (max-height: 688px) {
+  .app-shell {
+    /* Header follows 9dvh while transport remains at its 124px floor:
+       (100dvh - 9dvh - 124px) * 16 / 9. */
+    --arena-primary-width: min(100%, calc(161.7778vh - 220.44px), 1280px);
+    --arena-primary-width: min(100%, calc(161.7778dvh - 220.44px), 1280px);
+  }
+}
+
 @media (max-width: 1120px) {
   .topbar {
     grid-template-columns: auto minmax(260px, 1fr) auto;
@@ -3207,8 +3303,49 @@ kbd {
     grid-template-columns: 1fr auto 1fr;
   }
 
+  .transport {
+    padding-inline: 12px;
+  }
+
+  .section-labels {
+    margin-inline: 48px;
+  }
+
+  .transport-cluster {
+    gap: 5px;
+  }
+
   .speed-control {
     min-width: 0;
+    gap: 7px;
+  }
+
+  .speed-control input {
+    width: 84px;
+  }
+
+}
+
+@media (min-width: 881px) and (max-width: 1000px) {
+  .transport-controls {
+    grid-template-columns: minmax(84px, 0.7fr) auto minmax(232px, 1.6fr);
+  }
+
+  .transport-cluster > .control-caption {
+    display: none;
+  }
+
+  .speed-control {
+    flex: 0 1 145px;
+  }
+
+  .speed-control input {
+    width: 64px;
+    min-width: 48px;
+  }
+
+  .section-labels {
+    margin-inline: 40px;
   }
 }
 
@@ -3277,6 +3414,68 @@ kbd {
 
   .keyboard-help {
     grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 880px) and (orientation: landscape) {
+  .app-shell {
+    --arena-header-height: 56px;
+    --arena-transport-height: 112px;
+    /* (100dvh - 56px - 112px) * 16 / 9, with a 280px stage floor. */
+    --arena-primary-width: min(100%, max(497.78px, calc(177.7778vh - 298.67px)), 1280px);
+    --arena-primary-width: min(100%, max(497.78px, calc(177.7778dvh - 298.67px)), 1280px);
+  }
+
+  .topbar {
+    min-height: var(--arena-header-height);
+  }
+
+  .stage-wrap {
+    width: var(--arena-primary-width);
+    min-height: 0;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .transport {
+    width: var(--arena-primary-width);
+    min-height: var(--arena-transport-height);
+    padding: 5px 10px 6px;
+  }
+
+  .section-labels {
+    margin: 1px 36px 0;
+  }
+
+  .section-pill {
+    min-height: 18px;
+    padding: 3px 5px 2px;
+    font-size: 12px;
+  }
+
+  .transport-controls {
+    grid-template-columns: minmax(80px, 0.55fr) 44px minmax(218px, 1.45fr);
+    gap: 8px;
+    margin-top: 3px;
+  }
+
+  .transport-cluster > .control-caption {
+    display: none;
+  }
+
+  .play-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .speed-control {
+    flex: 0 1 132px;
+    gap: 5px;
+  }
+
+  .speed-control input {
+    width: 48px;
+    min-width: 44px;
   }
 }
 

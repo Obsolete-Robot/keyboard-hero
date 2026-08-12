@@ -96,6 +96,14 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /Mute player piano/);
   assert.match(page, /Your keys are muted/);
   assert.match(page, /showMutedPlayerPianoCue/);
+  assert.match(page, /dialogRef\.current\?\.focus/);
+  assert.match(page, /document\.body\.style\.overflow = "hidden"/);
+  assert.match(page, /dialog\.addEventListener\("keydown", handleDialogKeyDown\)/);
+  assert.match(page, /returnFocus\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(page, /const openLibrary = useCallback/);
+  assert.match(page, /pauseForLibrary\(\);[\s\S]*?setLibraryOpen\(true\)/);
+  assert.match(page, /if \(libraryOpen \|\| songComplete\) return/);
+  assert.match(page, /onClick=\{openLibrary\}/);
   assert.match(page, /hero\.power\.active/);
   assert.match(page, /power=\{hero\.power\}/);
   assert.match(page, /pointsAwarded/);
@@ -109,6 +117,21 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(appCss, /\.power-meter\.is-active/);
   assert.match(appCss, /power-stage-breathe/);
   assert.match(appCss, /prefers-reduced-motion: reduce/);
+  assert.match(appCss, /--arena-header-height: clamp\(58px, 9dvh, 70px\)/);
+  assert.match(appCss, /--arena-transport-height: clamp\(124px, 18dvh, 148px\)/);
+  assert.match(appCss, /--arena-primary-width: min\(100%, 129dvh, 1280px\)/);
+  assert.match(appCss, /overflow-y: auto/);
+  assert.match(appCss, /\.app-shell \{[\s\S]*?overflow: visible;/);
+  assert.match(appCss, /aspect-ratio: 16 \/ 9/);
+  assert.match(appCss, /\.stage-wrap > \.kh-stage \{[\s\S]*?min-height: 0;/);
+  assert.match(appCss, /max-height: 644px/);
+  assert.match(appCss, /max\(568\.89px, calc\(177\.7778dvh - 323\.56px\)\)/);
+  assert.match(appCss, /calc\(161\.7778dvh - 220\.44px\)/);
+  assert.match(appCss, /max-width: 1000px/);
+  assert.match(appCss, /orientation: landscape/);
+  assert.match(appCss, /max\(497\.78px, calc\(177\.7778dvh - 298\.67px\)\)/);
+  assert.match(appCss, /minmax\(80px, 0\.55fr\) 44px minmax\(218px, 1\.45fr\)/);
+  assert.match(appCss, /\.close-button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/);
   assert.match(page, /Rockstar!/);
   assert.match(page, /result\.grade === "miss"/);
   assert.match(page, /\["flow", "wait", "listen"\]/);
@@ -127,6 +150,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /shockwave/);
   assert.match(stage, /KeyboardStagePowerState/);
   assert.match(stage, /powerSurgeRing/);
+  assert.match(stage, /!hasCachedTransform/);
+  assert.match(stage, /!Number\.isFinite\(lastStrikeWidth\)/);
   assert.match(stage, /flareMaterial/);
   assert.match(stage, /vertexColors: true/);
   assert.match(stage, /data-power-mode/);
@@ -174,6 +199,55 @@ test("ships the finished game rather than starter assets", async () => {
 
   await access(new URL("../public/og-rock-v2.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
+});
+
+test("fits the primary arena inside common 16:9 desktop viewports", () => {
+  const targets = [
+    { width: 1366, height: 768 },
+    { width: 1280, height: 720 },
+    { width: 1223, height: 688 },
+    { width: 1156, height: 650 },
+    { width: 1024, height: 576 },
+    { width: 960, height: 540 },
+    { width: 854, height: 480 },
+    { width: 800, height: 450 },
+  ];
+  const clamp = (minimum, preferred, maximum) =>
+    Math.min(maximum, Math.max(minimum, preferred));
+
+  for (const { width, height } of targets) {
+    const compactLandscape = width >= 641 && width <= 880 && width > height;
+    const headerHeight = compactLandscape
+      ? 56
+      : clamp(58, height * 0.09, 70);
+    const transportHeight = compactLandscape
+      ? 112
+      : clamp(124, height * 0.18, 148);
+    const sidebarWidth = width <= 880 ? 0 : width <= 1120 ? 276 : 310;
+    const playColumnWidth = width - sidebarWidth;
+    const heightBudgetWidth =
+      compactLandscape || height <= 688
+        ? (height - headerHeight - transportHeight) * (16 / 9)
+        : height * 1.29;
+    const minimumStageWidth = compactLandscape ? 280 * (16 / 9) : 0;
+    const shellWidth = Math.min(
+      playColumnWidth,
+      Math.max(minimumStageWidth, heightBudgetWidth),
+      1280,
+    );
+    const stageHeight = shellWidth * (9 / 16);
+    const occupiedHeight = headerHeight + transportHeight + stageHeight;
+
+    assert.ok(
+      occupiedHeight <= height + 0.01,
+      `${width}x${height} arena is ${occupiedHeight - height}px too tall`,
+    );
+    assert.ok(shellWidth <= playColumnWidth, `${width}x${height} overflows horizontally`);
+    assert.ok(
+      stageHeight >= (compactLandscape ? 280 : 350),
+      `${width}x${height} stage is too short to read`,
+    );
+  }
 });
 
 test("grades the score sheet from timing, completion, and extra misses", async () => {
