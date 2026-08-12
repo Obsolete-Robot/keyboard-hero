@@ -146,12 +146,28 @@ export function buildPerformanceReport(
   mode: PracticeMode,
 ): PerformanceReport {
   const counts = { perfect: 0, great: 0, good: 0, miss: 0 };
+  const timingPoints = { perfect: 0, great: 0, good: 0 };
   const sustainCounts = { full: 0, partial: 0, earlyRelease: 0 };
+  let hasDifficultyAdjustedPoints = false;
 
   for (const note of song.notes) {
     const result = noteResults.get(note.id);
     if (!result) continue;
     counts[result.grade] += 1;
+    if (result.grade !== "miss") {
+      const nominalPoints =
+        result.grade === "perfect"
+          ? 1000
+          : result.grade === "great"
+            ? 700
+            : 450;
+      if (typeof result.basePointsAwarded === "number") {
+        timingPoints[result.grade] += result.basePointsAwarded;
+        hasDifficultyAdjustedPoints ||= result.basePointsAwarded !== nominalPoints;
+      } else {
+        timingPoints[result.grade] += nominalPoints;
+      }
+    }
     if (result.sustain?.grade === "full") sustainCounts.full += 1;
     else if (result.sustain?.grade === "partial") sustainCounts.partial += 1;
     else if (result.sustain?.grade === "early-release") {
@@ -164,7 +180,7 @@ export function buildPerformanceReport(
   const extraMisses = Math.max(0, score.misses - counts.miss);
   const missedOrUnplayed = counts.miss + unplayed + extraMisses;
   const basePoints =
-    counts.perfect * 1000 + counts.great * 700 + counts.good * 450;
+    timingPoints.perfect + timingPoints.great + timingPoints.good;
   const sustainPoints = Math.max(0, score.sustainPoints);
   const streakBonus = Math.max(
     0,
@@ -182,20 +198,26 @@ export function buildPerformanceReport(
   const rows: ResultRow[] = [
     {
       label: "Perfect timing",
-      detail: `${counts.perfect} × 1,000`,
-      points: counts.perfect * 1000,
+      detail: hasDifficultyAdjustedPoints
+        ? `${counts.perfect} notes · mode + tempo adjusted`
+        : `${counts.perfect} × 1,000`,
+      points: timingPoints.perfect,
       tone: "perfect",
     },
     {
       label: "Great timing",
-      detail: `${counts.great} × 700`,
-      points: counts.great * 700,
+      detail: hasDifficultyAdjustedPoints
+        ? `${counts.great} notes · mode + tempo adjusted`
+        : `${counts.great} × 700`,
+      points: timingPoints.great,
       tone: "great",
     },
     {
       label: "Good timing",
-      detail: `${counts.good} × 450`,
-      points: counts.good * 450,
+      detail: hasDifficultyAdjustedPoints
+        ? `${counts.good} notes · mode + tempo adjusted`
+        : `${counts.good} × 450`,
+      points: timingPoints.good,
       tone: "good",
     },
     {

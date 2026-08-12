@@ -110,6 +110,26 @@ test("tap notes have no hold score and longer authored tails earn more", () => {
   );
 });
 
+test("sustain points use the mode and tempo rate latched at the attack", () => {
+  const requirement = sustainRequirement(1, 500);
+  const waitSlow = judgeSustain(
+    requirement.requiredBeats,
+    requirement.requiredBeats,
+    1,
+    0.125,
+  );
+  const flowFast = judgeSustain(
+    requirement.requiredBeats,
+    requirement.requiredBeats,
+    1,
+    1.25,
+  );
+
+  assert.equal(waitSlow.pointsAwarded, 11);
+  assert.equal(flowFast.pointsAwarded, 114);
+  assert.equal(waitSlow.scoreRate, 0.125);
+});
+
 test("attempt ownership is fully cleared for replay, seek, and loop resets", async () => {
   const claims = new Map([
     ["c4", { sourceId: "keyboard:KeyQ:60" }],

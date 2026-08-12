@@ -76,14 +76,18 @@ export function pointsForJudgement(
   grade: PowerJudgementGrade,
   combo: number,
   multiplier: number,
+  scoreRate = 1,
 ): number {
   if (grade === "miss") return 0;
   const safeCombo = Number.isFinite(combo) ? Math.max(0, Math.trunc(combo)) : 0;
   const safeMultiplier = Number.isFinite(multiplier)
     ? Math.max(1, multiplier)
     : 1;
+  const safeScoreRate = Number.isFinite(scoreRate)
+    ? Math.max(0, scoreRate)
+    : 1;
   const base = SCORE_BY_GRADE[grade] + Math.min(500, safeCombo * 10);
-  return Math.round(base * safeMultiplier);
+  return Math.round(base * safeMultiplier * safeScoreRate);
 }
 
 /**

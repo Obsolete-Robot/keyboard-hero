@@ -132,6 +132,12 @@ test("feedback point awards use the exact active multiplier", () => {
   assert.equal(pointsForJudgement("miss", 60, 2), 0);
 });
 
+test("mode and tempo rates scale the full judgement award", () => {
+  assert.equal(pointsForJudgement("perfect", 1, 1, 0.125), 126);
+  assert.equal(pointsForJudgement("perfect", 1, 1, 1.25), 1263);
+  assert.equal(pointsForJudgement("great", 10, 2, 0.5), 800);
+});
+
 test("song completion clears live power without erasing earned activations", () => {
   let power = createPowerModeState();
   for (let index = 0; index < 9; index += 1) {

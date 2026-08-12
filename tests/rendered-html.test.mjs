@@ -512,6 +512,27 @@ test("grades the score sheet from timing, completion, and extra misses", async (
     1330,
   );
 
+  const adjusted = buildPerformanceReport(
+    song(1),
+    new Map([
+      [
+        "note-0",
+        {
+          ...result("note-0", "perfect"),
+          basePointsAwarded: 125,
+        },
+      ],
+    ]),
+    score({ points: 126, combo: 1, bestCombo: 1, hits: 1 }),
+    "wait",
+  );
+  assert.equal(adjusted.rows[0].points, 125);
+  assert.match(adjusted.rows[0].detail, /mode \+ tempo adjusted/);
+  assert.equal(
+    adjusted.rows.reduce((total, row) => total + row.points, 0),
+    126,
+  );
+
   const skipped = buildPerformanceReport(
     song(2),
     new Map([["note-0", result("note-0", "perfect")]]),

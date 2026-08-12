@@ -34,6 +34,7 @@ import {
   pointsForJudgement,
   type KeyboardHeroPowerState,
 } from "@/lib/powerMode";
+import { scoreRateForSettings } from "@/lib/scoreDifficulty";
 import { MIDI_MAX, MIDI_MIN, type Song, type SongNote } from "@/lib/songs";
 import {
   clearNoteClaims,
@@ -66,6 +67,8 @@ export interface NoteResult {
   earlyCaptured?: boolean;
   /** Final authored-duration judgement. Tap notes and unresolved holds omit it. */
   sustain?: NoteSustainResult;
+  /** Difficulty-adjusted timing value before combo and POWER bonuses. */
+  basePointsAwarded?: number;
 }
 
 export type NoteSustainResult = SustainJudgement;
@@ -75,9 +78,11 @@ export interface NoteFeedback extends NoteResult {
   sequence: number;
   /** Shared by all resolved tones in one authored chord; extras fall back to their unique id. */
   groupId: string;
-  /** Exact score delta already including combo bonus and POWER multiplier. */
+  /** Exact score delta including difficulty rate, combo bonus, and POWER. */
   pointsAwarded: number;
   multiplier: number;
+  /** Mode-and-tempo scoring rate used for this judgement. */
+  scoreRate: number;
   /** True only for the successful judgement that filled the power meter. */
   powerActivation: boolean;
 }
@@ -286,6 +291,7 @@ interface ActivePlayerNoteAttempt {
   holdStartBeat: number;
   requiredBeats: number;
   multiplier: number;
+  scoreRate: number;
   sustainScored: boolean;
 }
 
@@ -1239,6 +1245,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
       const chordKey = powerChordKeyByNoteId.get(result.id);
       const scoringEnabled = !quickLoopEnabledRef.current;
+      const scoreRate = scoreRateForSettings(
+        settingsRef.current.practiceMode,
+        settingsRef.current.tempoScale,
+      );
       const multiplier =
         scoringEnabled && chordKey
           ? latchChordScoreMultiplier(
@@ -1248,6 +1258,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
             )
           : 1;
       let pointsAwarded = 0;
+      let basePointsAwarded = 0;
       let powerActivation = false;
       if (scoringEnabled) {
         const powerOutcome = applyPowerJudgement(
@@ -1270,7 +1281,18 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         } else {
           const combo = currentScore.combo + 1;
           const hits = currentScore.hits + 1;
-          pointsAwarded = pointsForJudgement(result.grade, combo, multiplier);
+          basePointsAwarded = pointsForJudgement(
+            result.grade,
+            0,
+            1,
+            scoreRate,
+          );
+          pointsAwarded = pointsForJudgement(
+            result.grade,
+            combo,
+            multiplier,
+            scoreRate,
+          );
           nextScore = {
             points: currentScore.points + pointsAwarded,
             sustainPoints: currentScore.sustainPoints,
@@ -1285,16 +1307,24 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         setScore(nextScore);
       }
 
-      resultsRef.current = new Map(resultsRef.current).set(result.id, result);
+      const scoredResult: NoteResult = {
+        ...result,
+        basePointsAwarded,
+      };
+      resultsRef.current = new Map(resultsRef.current).set(
+        result.id,
+        scoredResult,
+      );
       setNoteResults(resultsRef.current);
       feedbackSequenceRef.current += 1;
       const feedbackEvent: NoteFeedback = {
-        ...result,
+        ...scoredResult,
         id: `${result.id}:feedback-${feedbackSequenceRef.current}`,
         sequence: feedbackSequenceRef.current,
         groupId: chordKey ?? result.id,
         pointsAwarded,
         multiplier,
+        scoreRate,
         powerActivation,
       };
       setLatestFeedback(feedbackEvent);
@@ -1337,6 +1367,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         heldBeats,
         attempt.requiredBeats,
         attempt.multiplier,
+        attempt.scoreRate,
       );
       const sustain = quickLoopEnabledRef.current
         ? { ...judgedSustain, pointsAwarded: 0 }
@@ -1447,6 +1478,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           );
           attempt.requiredBeats = requirement.requiredBeats;
           attempt.multiplier = onset.multiplier;
+          attempt.scoreRate = onset.scoreRate;
           changed = true;
         }
 
@@ -1570,6 +1602,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
             holdStartBeat: candidate.note.startBeat,
             requiredBeats: requirement.requiredBeats,
             multiplier: 1,
+            scoreRate: 1,
             sustainScored: false,
           };
           playerNoteAttemptsRef.current.set(candidate.note.id, attempt);
@@ -1592,6 +1625,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
             holdStartBeat: Math.max(candidate.note.startBeat, judgedBeat),
             requiredBeats: requirement.requiredBeats,
             multiplier: onset.multiplier,
+            scoreRate: onset.scoreRate,
             sustainScored: false,
           };
           playerNoteAttemptsRef.current.set(candidate.note.id, attempt);

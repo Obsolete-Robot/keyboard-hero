@@ -32,6 +32,8 @@ export interface SustainJudgement {
   progress: number;
   pointsAwarded: number;
   multiplier: number;
+  /** Mode-and-tempo scoring rate latched when the note attack was judged. */
+  scoreRate: number;
 }
 
 /** Clear both sides of the transient note/source ownership registry. */
@@ -147,12 +149,15 @@ export function judgeSustain(
   heldBeats: number,
   requiredBeats: number,
   multiplier = 1,
+  scoreRate = 1,
 ): SustainJudgement {
   const normalizedHeld = Number.isFinite(heldBeats) ? Math.max(0, heldBeats) : 0;
   const normalizedRequired =
     Number.isFinite(requiredBeats) && requiredBeats > 0 ? requiredBeats : 0;
   const normalizedMultiplier =
     Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+  const normalizedScoreRate =
+    Number.isFinite(scoreRate) && scoreRate >= 0 ? scoreRate : 1;
   const progress = normalizedRequired > 0
     ? clamp(normalizedHeld / normalizedRequired, 0, 1)
     : 0;
@@ -168,8 +173,13 @@ export function judgeSustain(
     requiredBeats: normalizedRequired,
     progress,
     pointsAwarded: Math.round(
-      HOLD_POINTS_PER_BEAT * normalizedRequired * progress * normalizedMultiplier,
+      HOLD_POINTS_PER_BEAT *
+        normalizedRequired *
+        progress *
+        normalizedMultiplier *
+        normalizedScoreRate,
     ),
     multiplier: normalizedMultiplier,
+    scoreRate: normalizedScoreRate,
   };
 }

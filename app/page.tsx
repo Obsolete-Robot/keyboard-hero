@@ -46,6 +46,7 @@ import {
 } from "@/hooks/useKeyboardHeroCore";
 import { resolveMIDITransportIntent } from "@/lib/midiTransport";
 import { buildPerformanceReport } from "@/lib/performanceReport";
+import { scoreRateForSettings } from "@/lib/scoreDifficulty";
 import {
   getSongDurationSeconds,
   midiToNoteName,
@@ -658,6 +659,11 @@ export default function Home() {
     ? getTrainingSection(activeTrainingLesson, trainingSectionId)
     : null;
   const hero = useKeyboardHeroCore(song);
+  const scoreRate = scoreRateForSettings(
+    hero.settings.practiceMode,
+    hero.settings.tempoScale,
+  );
+  const scoreRateLabel = `${Number(scoreRate.toFixed(3))}× score`;
   const pauseForLibrary = hero.pause;
   const openLibrary = useCallback(() => {
     pauseForLibrary();
@@ -1619,6 +1625,10 @@ export default function Home() {
                   <strong>{Math.round(song.bpm * hero.settings.tempoScale)}</strong>
                   <span>Live BPM</span>
                 </div>
+                <div className="stage-metric">
+                  <strong>{Number(scoreRate.toFixed(3))}×</strong>
+                  <span>Score rate</span>
+                </div>
               </div>
             </div>
 
@@ -1663,6 +1673,7 @@ export default function Home() {
                       {hero.score.hits} notes landed
                       {hero.score.sustainPoints > 0 &&
                         ` // +${hero.score.sustainPoints.toLocaleString()} sustain`}
+                      {` // ${scoreRateLabel}`}
                     </>
                   )}
                 </span>
@@ -1993,7 +2004,7 @@ export default function Home() {
               <TrainingLauncher onOpen={openTraining} />
               <section className="coach-section">
             <div className="section-kicker">
-              Practice mode <strong>Live coach</strong>
+              Practice mode <strong>{scoreRateLabel}</strong>
             </div>
             <div className="mode-switch">
               {(["flow", "wait", "listen"] as const).map((mode) => (
