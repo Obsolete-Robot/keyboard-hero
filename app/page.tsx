@@ -544,23 +544,33 @@ function SongLibrary({
                             savedProgress ? " is-cleared" : ""
                           }`}
                         >
-                          <span>
-                            {savedProgress ? (
-                              <>
-                                <Check size={11} aria-hidden="true" /> Cleared
-                                {savedProgress.completedRuns > 1
-                                  ? ` ×${savedProgress.completedRuns}`
-                                  : ""}
-                              </>
-                            ) : (
-                              "Not cleared"
-                            )}
+                          <span className="song-card-progress-status">
+                            <small>Stage result</small>
+                            <b>
+                              {savedProgress && (
+                                <Check size={18} aria-hidden="true" />
+                              )}
+                              {savedProgress ? "Cleared" : "Not cleared"}
+                            </b>
+                            <small>
+                              {savedProgress
+                                ? `${savedProgress.completedRuns} completed ${
+                                    savedProgress.completedRuns === 1
+                                      ? "run"
+                                      : "runs"
+                                  }`
+                                : "Full scored run required"}
+                            </small>
                           </span>
-                          <strong>
-                            {savedProgress
-                              ? `Best ${savedProgress.bestScore.toLocaleString()}`
-                              : "Finish a scored run"}
-                          </strong>
+                          <span className="song-card-progress-score">
+                            <small>Personal best</small>
+                            <strong>
+                              {savedProgress
+                                ? savedProgress.bestScore.toLocaleString()
+                                : "No score"}
+                            </strong>
+                            <small>{savedProgress ? "Stage points" : "Play to rank"}</small>
+                          </span>
                         </div>
                         <Difficulty value={chart.difficulty} />
                         <div className="skill-chips">
