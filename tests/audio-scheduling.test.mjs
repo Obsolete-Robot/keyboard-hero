@@ -23,6 +23,7 @@ import {
 register(new URL("./path-alias-loader.mjs", import.meta.url));
 
 const { KeyboardSynth } = await import("../lib/audio.ts");
+const { getSongChart } = await import("../lib/songCatalog.ts");
 
 class FakeAudioParam {
   value = 0;
@@ -328,6 +329,67 @@ test("compound meter uses dotted pulses on the quarter-note transport", () => {
   assert.equal(isDownbeatPulse(0, [6, 8]), true);
   assert.equal(isDownbeatPulse(1, [6, 8]), false);
   assert.equal(isDownbeatPulse(2, [6, 8]), true);
+});
+
+test("the live synth consumes the selected song's authored event frame", () => {
+  const synth = new KeyboardSynth();
+  const row = getSongChart("row-row-row-your-boat", "easy");
+  let captured = null;
+  synth.playAuthoredAccompanimentFrame = (frame) => {
+    captured = frame;
+    return true;
+  };
+
+  assert.equal(
+    synth.syncAccompaniment({ song: row, beat: 1.5, intensity: 0.64 }),
+    true,
+  );
+  assert.equal(captured.song.accompaniment.name, "Riverboat six-eight");
+  assert.deepEqual(
+    captured.events.map((event) => [event.kind, event.beat]),
+    [
+      ["snare", 1.5],
+      ["closed-hat", 1.5],
+      ["bass", 1.5],
+      ["harmony", 1.5],
+    ],
+  );
+});
+
+test("authored song profiles produce audibly different live instrument activity", async () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  FakeAudioContext.instances = [];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { AudioContext: FakeAudioContext },
+    writable: true,
+  });
+
+  const synth = new KeyboardSynth();
+  try {
+    await synth.resume();
+    const context = FakeAudioContext.instances.at(-1);
+    const row = getSongChart("row-row-row-your-boat", "easy");
+    const minuet = getSongChart("minuet-in-g", "easy");
+
+    const beforeRow = context.oscillators.length;
+    assert.equal(synth.syncAccompaniment({ song: row, beat: 0 }), true);
+    const rowOscillators = context.oscillators.length - beforeRow;
+
+    const beforeMinuet = context.oscillators.length;
+    assert.equal(synth.syncAccompaniment({ song: minuet, beat: 0 }), true);
+    const minuetOscillators = context.oscillators.length - beforeMinuet;
+
+    assert.equal(rowOscillators, 5, "riverboat groove plays kick, bass, and chord");
+    assert.equal(minuetOscillators, 1, "drumless minuet opens with solo cello bass");
+  } finally {
+    await synth.dispose();
+    if (originalWindow) {
+      Object.defineProperty(globalThis, "window", originalWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
+    }
+  }
 });
 
 test("POWER MODE preserves the normal mix and clamps unsafe energy", () => {

@@ -16,6 +16,77 @@ export type Hand = "left" | "right" | "both";
 export type SongOrigin = "original" | "public-domain";
 export type Articulation = "legato" | "normal" | "staccato";
 
+export type AccompanimentDrumKit =
+  | "none"
+  | "brushes"
+  | "folk"
+  | "march"
+  | "orchestral"
+  | "rock"
+  | "studio"
+  | "electronic";
+export type AccompanimentBassVoice =
+  | "none"
+  | "round"
+  | "upright"
+  | "pluck"
+  | "tuba"
+  | "cello"
+  | "synth";
+export type AccompanimentHarmonyVoice =
+  | "none"
+  | "piano"
+  | "organ"
+  | "strings"
+  | "brass"
+  | "bell"
+  | "harpsichord"
+  | "synth";
+export type AccompanimentBassTone =
+  | "root"
+  | "fifth"
+  | "octave"
+  | "approach";
+
+export interface AccompanimentBassStep {
+  /** Position from 0 (measure start) to less than 1 (next measure). */
+  at: number;
+  tone: AccompanimentBassTone;
+  /** Length as a fraction of the current measure. */
+  duration: number;
+  velocity: number;
+}
+
+export interface AccompanimentHarmonyStep {
+  /** Position from 0 (measure start) to less than 1 (next measure). */
+  at: number;
+  /** Length as a fraction of the current measure. */
+  duration: number;
+  velocity: number;
+}
+
+/** Authored backing-band identity and measure pattern for one song family. */
+export interface SongAccompaniment {
+  /** Stable family-level identity; all difficulty charts share it. */
+  arrangementId: string;
+  /** User-facing band arrangement name. */
+  name: string;
+  /** One chord symbol per measure, repeated with the performance form. */
+  progression: readonly string[];
+  drumKit: AccompanimentDrumKit;
+  bassVoice: AccompanimentBassVoice;
+  harmonyVoice: AccompanimentHarmonyVoice;
+  /** Drum positions are normalized measure offsets from 0 through < 1. */
+  kick: readonly number[];
+  snare: readonly number[];
+  hats: readonly number[];
+  openHat?: readonly number[];
+  bass: readonly AccompanimentBassStep[];
+  harmony: readonly AccompanimentHarmonyStep[];
+  /** Rotates compact chord inversions without changing the harmony. */
+  voicingOffset?: number;
+}
+
 export interface SongNote {
   /** Stable identifier, suitable for React keys and score tracking. */
   id: string;
@@ -86,6 +157,8 @@ export interface Song {
   key: string;
   timeSignature: readonly [beatsPerMeasure: number, beatUnit: number];
   style: string;
+  /** Optional for drills; every career chart receives an authored arrangement. */
+  accompaniment?: SongAccompaniment;
   origin: SongOrigin;
   attribution: string;
   countInBeats: number;
@@ -1732,6 +1805,38 @@ export function validateSong(song: Song): string[] {
   if (!Number.isFinite(song.bpm) || song.bpm <= 0) issues.push("BPM must be positive");
   if (!Number.isFinite(song.durationBeats) || song.durationBeats <= 0) {
     issues.push("durationBeats must be positive");
+  }
+
+  if (song.accompaniment) {
+    if (!song.accompaniment.arrangementId.trim()) {
+      issues.push("accompaniment arrangementId is empty");
+    }
+    if (song.accompaniment.progression.length === 0) {
+      issues.push("accompaniment progression is empty");
+    }
+    const positions = [
+      ...song.accompaniment.kick,
+      ...song.accompaniment.snare,
+      ...song.accompaniment.hats,
+      ...(song.accompaniment.openHat ?? []),
+      ...song.accompaniment.bass.map((step) => step.at),
+      ...song.accompaniment.harmony.map((step) => step.at),
+    ];
+    if (positions.some((position) => !Number.isFinite(position) || position < 0 || position >= 1)) {
+      issues.push("accompaniment positions must be finite measure offsets from 0 through < 1");
+    }
+    if (
+      [...song.accompaniment.bass, ...song.accompaniment.harmony].some(
+        (step) =>
+          !Number.isFinite(step.duration) ||
+          step.duration <= 0 ||
+          !Number.isFinite(step.velocity) ||
+          step.velocity <= 0 ||
+          step.velocity > 1,
+      )
+    ) {
+      issues.push("accompaniment steps must have positive durations and velocities from 0 through 1");
+    }
   }
 
   for (const note of song.notes) {

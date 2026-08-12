@@ -6,7 +6,10 @@
  * browser audio API.
  */
 
-import { deriveHarmonyAtBeat } from "@/lib/accompaniment";
+import {
+  generateAccompanimentEvents,
+  type AccompanimentEvent,
+} from "@/lib/accompaniment";
 import {
   createPowerSaturationCurve,
   derivePowerModeProfile,
@@ -28,21 +31,27 @@ export type PerformanceCue =
   | "stamp-fail"
   | "stamp-neutral";
 
-export interface AccompanimentStep {
-  /** Zero-based musical pulse within the current measure. */
-  pulseInMeasure: number;
-  /** Zero-based eighth-note scheduler step within the current pulse. */
-  subdivisionInPulse: number;
-  subdivisionsPerPulse: number;
-  pulsesPerMeasure: number;
+export interface AccompanimentPlaybackFrame {
+  song: Song;
+  events: readonly AccompanimentEvent[];
   beatDurationSeconds: number;
-  /** Tonic in the bass register (C2 is MIDI 36). */
-  tonicMidi: number;
   /** Normalized arrangement density. */
   intensity: number;
   /** Optional normalized POWER MODE energy for this musical step. */
   power?: number;
-  /** Current harmony voicing, used for POWER rhythm reinforcement. */
+  downbeat: boolean;
+}
+
+/** @deprecated Retained for direct audio experiments; live songs use authored events. */
+export interface AccompanimentStep {
+  pulseInMeasure: number;
+  subdivisionInPulse: number;
+  subdivisionsPerPulse: number;
+  pulsesPerMeasure: number;
+  beatDurationSeconds: number;
+  tonicMidi: number;
+  intensity: number;
+  power?: number;
   harmonyPitches?: readonly number[];
 }
 
@@ -615,10 +624,213 @@ export class KeyboardSynth {
     return true;
   }
 
-  /**
-   * Keeps the procedural band locked to the transport. The public transport
-   * supplies musical beats; this method owns AudioContext scheduling details.
-   */
+  private playAuthoredAccompanimentFrame(
+    frame: AccompanimentPlaybackFrame,
+  ): boolean {
+    const context = this.ensureContext();
+    const destination = this.accompaniment;
+    if (
+      !context ||
+      !destination ||
+      context.state !== "running" ||
+      this.accompanimentVolume <= 0
+    ) {
+      return false;
+    }
+
+    const now = context.currentTime + 0.002;
+    const power = Math.min(1, Math.max(0, frame.power ?? this.powerProfile.amount));
+    const intensity = powerAccompanimentIntensity(frame.intensity, power);
+    const arrangement = frame.song.accompaniment;
+    const drumKit = arrangement?.drumKit ?? "brushes";
+    const bassVoice = arrangement?.bassVoice ?? "round";
+    const harmonyVoice = arrangement?.harmonyVoice ?? "piano";
+
+    for (const event of frame.events) {
+      const velocity = Math.min(1, Math.max(0.02, event.velocity));
+      const durationSeconds = Math.min(
+        2.8,
+        Math.max(0.035, event.durationBeats * frame.beatDurationSeconds),
+      );
+
+      if (event.kind === "kick") {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const electronic = drumKit === "electronic" || drumKit === "rock";
+        const orchestral = drumKit === "orchestral";
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(
+          electronic ? 126 : orchestral ? 92 : drumKit === "march" ? 105 : 112,
+          now,
+        );
+        oscillator.frequency.exponentialRampToValueAtTime(
+          electronic ? 42 : orchestral ? 48 : 46,
+          now + (orchestral ? 0.18 : 0.12),
+        );
+        gain.gain.setValueAtTime((0.22 + intensity * 0.2) * velocity, now);
+        gain.gain.exponentialRampToValueAtTime(
+          0.0001,
+          now + (orchestral ? 0.24 : 0.16),
+        );
+        oscillator.connect(gain);
+        gain.connect(destination);
+        this.trackAccompanimentSource(oscillator, [gain]);
+        oscillator.start(now);
+        oscillator.stop(now + (orchestral ? 0.26 : 0.18));
+        continue;
+      }
+
+      if (
+        event.kind === "snare" ||
+        event.kind === "closed-hat" ||
+        event.kind === "open-hat"
+      ) {
+        const source = context.createBufferSource();
+        const filter = context.createBiquadFilter();
+        const gain = context.createGain();
+        const hat = event.kind !== "snare";
+        const open = event.kind === "open-hat";
+        source.buffer = this.getNoiseBuffer(context);
+        filter.type = hat ? "highpass" : "bandpass";
+        filter.frequency.value = hat
+          ? drumKit === "electronic" ? 7_400 : drumKit === "brushes" ? 4_900 : 6_100
+          : drumKit === "march" ? 2_300 : drumKit === "orchestral" ? 1_480 : 1_850;
+        filter.Q.value = hat ? 0.48 : drumKit === "brushes" ? 0.34 : 0.78;
+        const noiseDuration = open
+          ? 0.16
+          : hat
+            ? 0.03
+            : drumKit === "brushes"
+              ? 0.16
+              : 0.1;
+        gain.gain.setValueAtTime(
+          (hat ? open ? 0.055 : 0.026 : drumKit === "brushes" ? 0.07 : 0.15) *
+            velocity *
+            (0.72 + intensity * 0.35),
+          now,
+        );
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + noiseDuration);
+        source.connect(filter);
+        filter.connect(gain);
+        gain.connect(destination);
+        this.trackAccompanimentSource(source, [filter, gain]);
+        source.start(now);
+        source.stop(now + noiseDuration + 0.02);
+        continue;
+      }
+
+      if (event.kind === "bass" && event.midi !== undefined) {
+        const oscillator = context.createOscillator();
+        const filter = context.createBiquadFilter();
+        const gain = context.createGain();
+        oscillator.type =
+          bassVoice === "synth"
+            ? "sawtooth"
+            : bassVoice === "tuba"
+              ? "square"
+              : bassVoice === "upright" || bassVoice === "pluck"
+                ? "triangle"
+                : "sine";
+        oscillator.frequency.value = midiToFrequency(event.midi);
+        filter.type = "lowpass";
+        filter.frequency.value =
+          bassVoice === "synth"
+            ? 420 + intensity * 260
+            : bassVoice === "pluck"
+              ? 520
+              : bassVoice === "cello"
+                ? 360
+                : 270;
+        filter.Q.value = bassVoice === "synth" ? 1.8 : 0.9;
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(
+          (0.075 + intensity * 0.055) * velocity,
+          now + (bassVoice === "pluck" || bassVoice === "upright" ? 0.004 : 0.012),
+        );
+        const bassDuration = Math.min(
+          durationSeconds,
+          bassVoice === "pluck" || bassVoice === "upright"
+            ? frame.beatDurationSeconds * 0.42
+            : durationSeconds,
+        );
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + bassDuration);
+        oscillator.connect(filter);
+        filter.connect(gain);
+        gain.connect(destination);
+        this.trackAccompanimentSource(oscillator, [filter, gain]);
+        oscillator.start(now);
+        oscillator.stop(now + bassDuration + 0.02);
+        continue;
+      }
+
+      if (event.kind === "harmony" && event.pitches?.length) {
+        const filter = context.createBiquadFilter();
+        const gain = context.createGain();
+        filter.type = "lowpass";
+        filter.frequency.value =
+          harmonyVoice === "synth"
+            ? 2_900 + intensity * 1_200
+            : harmonyVoice === "bell"
+              ? 4_800
+              : harmonyVoice === "strings"
+                ? 1_900
+                : 2_600;
+        filter.Q.value = harmonyVoice === "synth" ? 1.3 : 0.68;
+        gain.gain.setValueAtTime(0.0001, now);
+        const slowVoice = harmonyVoice === "strings" || harmonyVoice === "organ";
+        gain.gain.exponentialRampToValueAtTime(
+          (0.022 + intensity * 0.026 + power * 0.008) * velocity,
+          now + (slowVoice ? 0.045 : 0.007),
+        );
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSeconds);
+        gain.connect(filter);
+        filter.connect(destination);
+
+        const pitches = [...event.pitches].slice(0, power > 0.68 ? 4 : 3);
+        pitches.forEach((pitch, index) => {
+          const oscillator = context.createOscillator();
+          oscillator.type =
+            harmonyVoice === "organ"
+              ? index % 2 === 0 ? "sine" : "square"
+              : harmonyVoice === "strings" || harmonyVoice === "synth"
+                ? index % 2 === 0 ? "sawtooth" : "triangle"
+                : harmonyVoice === "bell" || harmonyVoice === "harpsichord"
+                  ? "triangle"
+                  : index % 2 === 0 ? "triangle" : "sine";
+          oscillator.frequency.value = midiToFrequency(pitch);
+          oscillator.detune.value = harmonyVoice === "strings" ? index * 3 - 3 : 0;
+          oscillator.connect(gain);
+          this.trackAccompanimentSource(
+            oscillator,
+            index === pitches.length - 1 ? [gain, filter] : [],
+          );
+          oscillator.start(now);
+          oscillator.stop(now + durationSeconds + 0.02);
+        });
+      }
+    }
+
+    if (power > 0.015 && frame.downbeat) {
+      const source = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      const gain = context.createGain();
+      source.buffer = this.getNoiseBuffer(context);
+      filter.type = "highpass";
+      filter.frequency.value = 3_100 + power * 1_100;
+      gain.gain.setValueAtTime(0.012 + power * 0.032, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(destination);
+      this.trackAccompanimentSource(source, [filter, gain]);
+      source.start(now);
+      source.stop(now + 0.14);
+    }
+
+    return true;
+  }
+
+  /** Keeps each song's authored backing arrangement locked to the transport. */
   syncAccompaniment(options: AccompanimentSyncOptions): boolean {
     const beat = Math.max(0, options.beat);
     const stepIndex = Math.floor(beat * 2 + 0.000_1);
@@ -638,26 +850,21 @@ export class KeyboardSynth {
 
     const tempoScale = Math.min(2, Math.max(0.1, options.tempoScale ?? 1));
     const beatDurationSeconds = 60 / (options.song.bpm * tempoScale);
-    const meter = meterGrid(options.song.timeSignature);
-    const subdivisionsPerPulse = Math.max(1, Math.round(meter.pulseBeats * 2));
-    const subdivisionsPerMeasure = Math.max(1, Math.round(meter.measureBeats * 2));
-    const subdivisionInMeasure =
-      ((stepIndex % subdivisionsPerMeasure) + subdivisionsPerMeasure) %
-      subdivisionsPerMeasure;
-    const pulseInMeasure = Math.floor(
-      subdivisionInMeasure / subdivisionsPerPulse,
+    const stepBeat = stepIndex / 2;
+    const events = generateAccompanimentEvents(
+      options.song,
+      stepBeat,
+      stepBeat + 0.5,
+      { intensity: options.intensity },
     );
-    const harmony = deriveHarmonyAtBeat(options.song, beat);
-    const played = this.playAccompanimentStep({
-      pulseInMeasure,
-      subdivisionInPulse: subdivisionInMeasure % subdivisionsPerPulse,
-      subdivisionsPerPulse,
-      pulsesPerMeasure: meter.pulsesPerMeasure,
+    const meter = meterGrid(options.song.timeSignature);
+    const played = this.playAuthoredAccompanimentFrame({
+      song: options.song,
+      events,
       beatDurationSeconds,
-      tonicMidi: harmony.bassMidi,
       intensity: Math.min(1, Math.max(0, options.intensity ?? 0.62)),
       power: this.powerProfile.amount,
-      harmonyPitches: harmony.pitches,
+      downbeat: Math.abs(stepBeat % meter.measureBeats) < 0.000_1,
     });
     if (played) {
       this.accompanimentSongId = options.song.id;

@@ -1244,6 +1244,21 @@ export default function Home() {
       : hero.settings.backingBandIntensity >= 0.55
         ? "Big groove"
         : "Laid back";
+  const backingBandParts = song.accompaniment
+    ? [
+        song.accompaniment.drumKit === "none"
+          ? null
+          : `${song.accompaniment.drumKit} drums`,
+        song.accompaniment.bassVoice === "none"
+          ? null
+          : `${song.accompaniment.bassVoice} bass`,
+        song.accompaniment.harmonyVoice === "none"
+          ? null
+          : song.accompaniment.harmonyVoice,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join(" · ")
+    : "Drums · bass · rhythm";
   const backingBandMeter = [0.62, 0.92, 0.74, 1, 0.68].map(
     (shape) =>
       `${Math.max(12, Math.round(backingBandEnergy * shape))}%`,
@@ -2120,8 +2135,8 @@ export default function Home() {
                     <AudioLines size={17} />
                   </span>
                   <div>
-                    <strong>Your band</strong>
-                    <span>Drums · bass · rhythm</span>
+                    <strong>{song.accompaniment?.name ?? "Your band"}</strong>
+                    <span>{backingBandParts}</span>
                   </div>
                 </div>
                 <div className="band-actions">

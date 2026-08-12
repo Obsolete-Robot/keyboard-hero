@@ -19,6 +19,7 @@ import {
   type SongNote,
   type SongSection,
 } from "@/lib/songs";
+import { accompanimentFor } from "@/lib/accompanimentProfiles";
 import { meterGrid } from "@/lib/meter";
 
 export const CHALLENGE_LEVELS = ["easy", "medium", "hard"] as const;
@@ -364,6 +365,7 @@ interface ChartBase {
   key: string;
   timeSignature: readonly [number, number];
   style: string;
+  accompaniment: NonNullable<Song["accompaniment"]>;
   origin: Song["origin"];
   attribution: string;
   durationBeats: number;
@@ -417,6 +419,7 @@ const createChart = (base: ChartBase, challenge: ChallengeLevel): SongChart => {
     key: base.key,
     timeSignature: base.timeSignature,
     style: base.style,
+    accompaniment: base.accompaniment,
     origin: base.origin,
     attribution: base.attribution,
     countInBeats: beatsPerMeasure(base.timeSignature),
@@ -630,6 +633,7 @@ const arrangePublicDomainTheme = (
       key: theme.key,
       timeSignature: theme.timeSignature,
       style: theme.style,
+      accompaniment: accompanimentFor(theme.id, theme.harmony),
       origin: "public-domain",
       attribution: `Public-domain composition; original Keyboard Hero 25-key arrangement.`,
       durationBeats,
@@ -749,6 +753,7 @@ const arrangeLegacySong = (song: Song, courseRank: number): SongFamily => {
       key: song.key,
       timeSignature: song.timeSignature,
       style: song.style,
+      accompaniment: accompanimentFor(song.id, progression),
       origin: song.origin,
       attribution: song.attribution,
       durationBeats,

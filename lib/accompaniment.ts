@@ -1,5 +1,9 @@
-import type { Song } from "@/lib/songs";
 import { meterGrid } from "@/lib/meter";
+import type {
+  AccompanimentBassTone,
+  Song,
+  SongAccompaniment,
+} from "@/lib/songs";
 
 const TICKS_PER_BEAT = 12;
 const EPSILON = 0.000_001;
@@ -12,9 +16,16 @@ export type AccompanimentEventKind =
   | "bass"
   | "harmony";
 
-export type HarmonyQuality = "major" | "minor" | "dominant";
+export type HarmonyQuality =
+  | "major"
+  | "minor"
+  | "dominant"
+  | "major-seventh"
+  | "minor-seventh"
+  | "diminished";
 
 export interface HarmonicVoicing {
+  symbol: string;
   rootPitchClass: number;
   quality: HarmonyQuality;
   bassMidi: number;
@@ -40,14 +51,43 @@ export interface AccompanimentGenerationOptions {
   harmony?: boolean;
 }
 
+interface ParsedHarmony {
+  symbol: string;
+  rootPitchClass: number;
+  quality: HarmonyQuality;
+  intervals: readonly number[];
+}
+
+const NOTE_PITCH_CLASSES: Readonly<Record<string, number>> = {
+  C: 0,
+  "C#": 1,
+  Db: 1,
+  D: 2,
+  "D#": 3,
+  Eb: 3,
+  E: 4,
+  F: 5,
+  "F#": 6,
+  Gb: 6,
+  G: 7,
+  "G#": 8,
+  Ab: 8,
+  A: 9,
+  "A#": 10,
+  Bb: 10,
+  B: 11,
+};
+
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
 
 const positiveModulo = (value: number, modulus: number): number =>
   ((value % modulus) + modulus) % modulus;
 
-const eventTick = (beat: number): number =>
-  Math.round(beat * TICKS_PER_BEAT);
+const roundBeat = (beat: number): number =>
+  Math.round(beat * TICKS_PER_BEAT) / TICKS_PER_BEAT;
+
+const eventTick = (beat: number): number => Math.round(beat * TICKS_PER_BEAT);
 
 const eventId = (
   song: Song,
@@ -62,122 +102,111 @@ export function beatsPerMeasure(
   return meterGrid(timeSignature).measureBeats;
 }
 
-function keyPitchClass(key: string): number {
+function keySymbol(key: string): string {
   const match = key.trim().match(/^([A-Ga-g])([#b]?)/);
-  if (!match) return 0;
-  const natural: Record<string, number> = {
-    C: 0,
-    D: 2,
-    E: 4,
-    F: 5,
-    G: 7,
-    A: 9,
-    B: 11,
+  if (!match) return "C";
+  const root = `${match[1].toUpperCase()}${match[2]}`;
+  return /minor/i.test(key) ? `${root}m` : root;
+}
+
+function parseHarmony(symbol: string): ParsedHarmony {
+  const match = /^(C#|Db|D#|Eb|F#|Gb|G#|Ab|A#|Bb|[A-G])/.exec(symbol);
+  if (!match) return parseHarmony("C");
+
+  const rootPitchClass = NOTE_PITCH_CLASSES[match[1]];
+  const suffix = symbol.slice(match[1].length);
+  if (suffix.includes("dim")) {
+    return {
+      symbol,
+      rootPitchClass,
+      quality: "diminished",
+      intervals: [0, 3, 6],
+    };
+  }
+  if (suffix.startsWith("m") && !suffix.startsWith("maj")) {
+    const seventh = suffix.includes("7");
+    return {
+      symbol,
+      rootPitchClass,
+      quality: seventh ? "minor-seventh" : "minor",
+      intervals: seventh ? [0, 3, 7, 10] : [0, 3, 7],
+    };
+  }
+  if (suffix.includes("maj7")) {
+    return {
+      symbol,
+      rootPitchClass,
+      quality: "major-seventh",
+      intervals: [0, 4, 7, 11],
+    };
+  }
+  if (suffix.includes("7")) {
+    return {
+      symbol,
+      rootPitchClass,
+      quality: "dominant",
+      intervals: [0, 4, 7, 10],
+    };
+  }
+  return {
+    symbol,
+    rootPitchClass,
+    quality: "major",
+    intervals: [0, 4, 7],
   };
-  const accidental = match[2] === "#" ? 1 : match[2] === "b" ? -1 : 0;
-  return positiveModulo(natural[match[1].toUpperCase()] + accidental, 12);
 }
 
-function harmonyNotes(song: Song, startBeat: number, endBeat: number) {
-  const overlapping = song.notes.filter(
-    (note) =>
-      note.startBeat < endBeat - EPSILON &&
-      note.startBeat + note.durationBeats > startBeat + EPSILON,
+function fallbackArrangement(song: Song): SongAccompaniment {
+  const meter = meterGrid(song.timeSignature);
+  const pulseOffsets = Array.from(
+    { length: meter.pulsesPerMeasure },
+    (_, index) => index / meter.pulsesPerMeasure,
   );
-  if (overlapping.length > 0) return overlapping;
-
-  const center = (startBeat + endBeat) / 2;
-  return [...song.notes]
-    .sort(
-      (left, right) =>
-        Math.abs(left.startBeat - center) - Math.abs(right.startBeat - center),
-    )
-    .slice(0, 8);
+  return {
+    arrangementId: `${song.id}:adaptive`,
+    name: "Adaptive practice pulse",
+    progression: [keySymbol(song.key)],
+    drumKit: "brushes",
+    bassVoice: "round",
+    harmonyVoice: "piano",
+    kick: [0],
+    snare: pulseOffsets.length > 1 ? [pulseOffsets.at(-1) ?? 0] : [],
+    hats: pulseOffsets,
+    bass: [{ at: 0, tone: "root", duration: 0.72, velocity: 0.58 }],
+    harmony: [{ at: 0, duration: 0.82, velocity: 0.36 }],
+  };
 }
 
-/**
- * Derives a compact, playable chord from the curriculum notes around a beat.
- * It is deterministic and AudioContext-free so groove/voicing tests can run in
- * Node. Lower and left-hand notes carry extra harmonic weight.
- */
-export function deriveHarmonyAtBeat(song: Song, beat: number): HarmonicVoicing {
-  const measureBeats = beatsPerMeasure(song.timeSignature);
-  const harmonicSpan = song.difficulty >= 3 ? Math.min(2, measureBeats) : measureBeats;
-  const segmentStart = Math.floor((beat + EPSILON) / harmonicSpan) * harmonicSpan;
-  const notes = harmonyNotes(song, segmentStart, segmentStart + harmonicSpan);
-  const pitchWeights = Array.from({ length: 12 }, () => 0);
+function arrangementFor(song: Song): SongAccompaniment {
+  return song.accompaniment ?? fallbackArrangement(song);
+}
 
-  for (const note of notes) {
-    const overlap = Math.max(
-      0.125,
-      Math.min(note.startBeat + note.durationBeats, segmentStart + harmonicSpan) -
-        Math.max(note.startBeat, segmentStart),
-    );
-    const handWeight = note.hand === "left" ? 1.38 : note.hand === "both" ? 1.16 : 1;
-    const registerWeight = note.midi < 60 ? 1.2 : 1;
-    const accentWeight = note.accent ? 1.18 : 1;
-    const velocityWeight = clamp((note.velocity ?? 88) / 96, 0.65, 1.25);
-    pitchWeights[positiveModulo(note.midi, 12)] +=
-      overlap * handWeight * registerWeight * accentWeight * velocityWeight;
-  }
+function harmonyForMeasure(
+  song: Song,
+  measureIndex: number,
+): ParsedHarmony {
+  const arrangement = arrangementFor(song);
+  const symbol =
+    arrangement.progression[
+      positiveModulo(measureIndex, arrangement.progression.length)
+    ] ?? keySymbol(song.key);
+  return parseHarmony(symbol);
+}
 
-  const tonic = keyPitchClass(song.key);
-  const style = song.style.toLowerCase();
-  const qualities: ReadonlyArray<{
-    quality: HarmonyQuality;
-    intervals: readonly number[];
-  }> = [
-    { quality: "major", intervals: [0, 4, 7] },
-    { quality: "minor", intervals: [0, 3, 7] },
-    { quality: "dominant", intervals: [0, 4, 7, 10] },
-  ];
-
-  let bestRoot = tonic;
-  let bestQuality: HarmonyQuality = /minor/i.test(song.key) ? "minor" : "major";
-  let bestScore = Number.NEGATIVE_INFINITY;
-
-  for (let root = 0; root < 12; root += 1) {
-    for (const candidate of qualities) {
-      let score = candidate.intervals.reduce(
-        (total, interval, index) =>
-          total +
-          pitchWeights[positiveModulo(root + interval, 12)] *
-            (index === 0 ? 1.42 : index === 2 ? 0.92 : 1.04),
-        0,
-      );
-      score += pitchWeights[root] * 0.42;
-      if (root === tonic) score += 0.32;
-      if (candidate.quality === "dominant") {
-        score += /blues|rock|new orleans/.test(style) ? 0.2 : -0.22;
-      }
-      const opposingThird = candidate.quality === "minor" ? 4 : 3;
-      score -= pitchWeights[positiveModulo(root + opposingThird, 12)] * 0.14;
-
-      if (score > bestScore + EPSILON) {
-        bestScore = score;
-        bestRoot = root;
-        bestQuality = candidate.quality;
-      }
-    }
-  }
-
-  const intervals =
-    bestQuality === "minor"
-      ? [0, 3, 7]
-      : bestQuality === "dominant"
-        ? [0, 4, 7, 10]
-        : [0, 4, 7];
-  let rootMidi = 48 + bestRoot;
+function compactVoicing(
+  harmony: ParsedHarmony,
+  measureIndex: number,
+  voicingOffset = 0,
+): number[] {
+  let rootMidi = 48 + harmony.rootPitchClass;
   if (rootMidi > 55) rootMidi -= 12;
-  let pitches = intervals.map((interval) => rootMidi + interval);
-
-  // Small deterministic inversions make repeated sections breathe without
-  // producing the large jumps that algorithmic accompaniment often suffers.
-  const segmentIndex = Math.floor((segmentStart + EPSILON) / harmonicSpan);
-  if (segmentIndex % 3 === 1 && pitches.length > 2) {
+  let pitches = harmony.intervals.map((interval) => rootMidi + interval);
+  const inversion = positiveModulo(
+    measureIndex + voicingOffset,
+    Math.min(3, pitches.length),
+  );
+  for (let index = 0; index < inversion; index += 1) {
     pitches = [...pitches.slice(1), pitches[0] + 12];
-  } else if (segmentIndex % 3 === 2 && pitches.length > 2) {
-    pitches = [...pitches.slice(2), pitches[0] + 12, pitches[1] + 12];
   }
   while (pitches.reduce((sum, pitch) => sum + pitch, 0) / pitches.length > 64) {
     pitches = pitches.map((pitch) => pitch - 12);
@@ -185,13 +214,41 @@ export function deriveHarmonyAtBeat(song: Song, beat: number): HarmonicVoicing {
   while (pitches.reduce((sum, pitch) => sum + pitch, 0) / pitches.length < 52) {
     pitches = pitches.map((pitch) => pitch + 12);
   }
+  return pitches;
+}
 
+/** Returns the authored chord for the current measure, with a compact voicing. */
+export function deriveHarmonyAtBeat(song: Song, beat: number): HarmonicVoicing {
+  const measureBeats = beatsPerMeasure(song.timeSignature);
+  const measureIndex = Math.max(0, Math.floor((beat + EPSILON) / measureBeats));
+  const harmony = harmonyForMeasure(song, measureIndex);
   return {
-    rootPitchClass: bestRoot,
-    quality: bestQuality,
-    bassMidi: 36 + bestRoot,
-    pitches,
+    symbol: harmony.symbol,
+    rootPitchClass: harmony.rootPitchClass,
+    quality: harmony.quality,
+    bassMidi: 36 + harmony.rootPitchClass,
+    pitches: compactVoicing(
+      harmony,
+      measureIndex,
+      arrangementFor(song).voicingOffset,
+    ),
   };
+}
+
+function bassMidiForTone(
+  tone: AccompanimentBassTone,
+  harmony: ParsedHarmony,
+  nextHarmony: ParsedHarmony,
+): number {
+  const root = 36 + harmony.rootPitchClass;
+  if (tone === "root") return root;
+  if (tone === "octave") return root + 12;
+  if (tone === "fifth") {
+    const pitchClass = positiveModulo(harmony.rootPitchClass + 7, 12);
+    return 36 + pitchClass + (pitchClass < harmony.rootPitchClass ? 12 : 0);
+  }
+  const nextRoot = 36 + nextHarmony.rootPitchClass;
+  return nextRoot > root ? nextRoot - 1 : nextRoot + 1;
 }
 
 function addEvent(
@@ -211,10 +268,16 @@ function addEvent(
   });
 }
 
+const snappedMeasureBeat = (
+  measureStart: number,
+  measureBeats: number,
+  normalizedOffset: number,
+): number => roundBeat(measureStart + normalizedOffset * measureBeats);
+
 /**
- * Generates a deterministic backing-band timeline for a beat window. Events
- * are start-inclusive/end-exclusive, making adjacent scheduler windows safe to
- * concatenate without duplicates.
+ * Builds the exact authored band timeline. Every career song supplies its own
+ * progression, rhythm pattern, and instrument palette; drills use a restrained
+ * fallback pulse.
  */
 export function generateAccompanimentEvents(
   song: Song,
@@ -226,165 +289,106 @@ export function generateAccompanimentEvents(
     return [];
   }
 
+  const arrangement = arrangementFor(song);
   const intensity = clamp(
     options.intensity ?? 0.38 + song.difficulty * 0.105,
     0.2,
     1,
   );
-  const includeDrums = options.drums ?? true;
-  const includeBass = options.bass ?? true;
-  const includeHarmony = options.harmony ?? true;
-  const meter = meterGrid(song.timeSignature);
-  const measureBeats = meter.measureBeats;
-  const isTriple = !meter.compound && meter.pulsesPerMeasure === 3;
-  const style = song.style.toLowerCase();
-  const isSwing = /blues|new orleans/.test(style);
-  const isRock = /rock|arena/.test(style);
-  const isCinematic = /cinematic/.test(style);
-  const isMarch = /march/.test(style);
+  const includeDrums =
+    (options.drums ?? true) && arrangement.drumKit !== "none";
+  const includeBass =
+    (options.bass ?? true) && arrangement.bassVoice !== "none";
+  const includeHarmony =
+    (options.harmony ?? true) && arrangement.harmonyVoice !== "none";
+  const measureBeats = beatsPerMeasure(song.timeSignature);
   const firstMeasure = Math.floor(Math.max(0, startBeat) / measureBeats);
-  const lastMeasure = Math.ceil(Math.min(song.durationBeats, endBeat) / measureBeats);
+  const lastMeasure = Math.ceil(
+    Math.min(song.durationBeats, endBeat) / measureBeats,
+  );
   const events: AccompanimentEvent[] = [];
 
   for (let measure = firstMeasure; measure < lastMeasure; measure += 1) {
     const measureStart = measure * measureBeats;
     const measureEnd = Math.min(song.durationBeats, measureStart + measureBeats);
+    const harmony = harmonyForMeasure(song, measure);
+    const nextHarmony = harmonyForMeasure(song, measure + 1);
+    const pitches = compactVoicing(
+      harmony,
+      measure,
+      arrangement.voicingOffset,
+    );
 
     if (includeDrums) {
-      const kickOffsets = meter.compound
-        ? [0]
-        : isTriple
-        ? [0]
-        : isCinematic && !isRock
-          ? [0, 2]
-          : song.difficulty >= 4
-            ? [0, 1.75, 2, 3.5]
-            : [0, 2];
-      for (const [index, offset] of kickOffsets.entries()) {
-        if (offset >= measureBeats) continue;
+      arrangement.kick.forEach((at, index) => {
         addEvent(events, song, startBeat, endBeat, {
           kind: "kick",
-          beat: measureStart + offset,
+          beat: snappedMeasureBeat(measureStart, measureBeats, at),
           durationBeats: 0.24,
-          velocity: intensity * (index === 0 ? 0.96 : 0.78),
-        });
-      }
-
-      const snareOffsets = meter.compound
-        ? [meter.pulseBeats]
-        : isTriple
-          ? [meter.pulseBeats, meter.pulseBeats * 2]
-          : isCinematic && !isMarch
-            ? [2]
-            : [1, 3];
-      for (const [index, offset] of snareOffsets.entries()) {
-        if (offset >= measureBeats) continue;
+          velocity: intensity * (index === 0 ? 0.88 : 0.7),
+        }, `:${index}`);
+      });
+      arrangement.snare.forEach((at, index) => {
         addEvent(events, song, startBeat, endBeat, {
           kind: "snare",
-          beat: measureStart + offset,
+          beat: snappedMeasureBeat(measureStart, measureBeats, at),
           durationBeats: 0.2,
-          velocity:
-            intensity *
-            (meter.compound
-              ? 0.68
-              : isTriple
-                ? (index === 0 ? 0.58 : 0.5)
-                : 0.82),
-        });
-      }
-
-      const hatStep = meter.compound
-        ? meter.beatUnitBeats
-        : song.difficulty >= 4 && (isRock || isCinematic)
-          ? 0.25
-          : song.difficulty >= 2 || isMarch
-            ? 0.5
-            : Math.min(1, meter.pulseBeats);
-      for (let offset = 0; offset < measureBeats - EPSILON; offset += hatStep) {
-        const swungOffset =
-          isSwing && hatStep === 0.5 && Math.round(offset * 2) % 2 === 1
-            ? Math.floor(offset) + 2 / 3
-            : offset;
-        const isLastOffbeat =
-          song.difficulty >= 3 &&
-          swungOffset >= measureBeats - 0.5 - EPSILON;
-        const kind: AccompanimentEventKind = isLastOffbeat ? "open-hat" : "closed-hat";
-        const subdivision = Math.round(offset / hatStep);
+          velocity: intensity * (index === 0 ? 0.72 : 0.62),
+        }, `:${index}`);
+      });
+      const openHatTicks = new Set(
+        (arrangement.openHat ?? []).map((at) =>
+          eventTick(snappedMeasureBeat(measureStart, measureBeats, at)),
+        ),
+      );
+      const hatOffsets = [
+        ...arrangement.hats,
+        ...(arrangement.openHat ?? []).filter(
+          (at) => !arrangement.hats.includes(at),
+        ),
+      ];
+      hatOffsets.forEach((at, index) => {
+        const beat = snappedMeasureBeat(measureStart, measureBeats, at);
+        const open = openHatTicks.has(eventTick(beat));
         addEvent(events, song, startBeat, endBeat, {
-          kind,
-          beat: measureStart + swungOffset,
-          durationBeats: isLastOffbeat ? 0.42 : 0.08,
-          velocity:
-            intensity *
-            (subdivision % Math.round(Math.max(1, 1 / hatStep)) === 0 ? 0.42 : 0.29),
-        });
-      }
+          kind: open ? "open-hat" : "closed-hat",
+          beat,
+          durationBeats: open ? 0.36 : 0.08,
+          velocity: intensity * (index === 0 ? 0.38 : open ? 0.4 : 0.28),
+        }, `:${index}`);
+      });
     }
 
     if (includeBass) {
-      const voicing = deriveHarmonyAtBeat(song, measureStart + 0.01);
-      const bassOffsets = meter.compound
-        ? [0, meter.pulseBeats]
-        : isTriple
-        ? [0]
-        : song.difficulty <= 1
-          ? [0, 2]
-          : song.difficulty <= 3
-            ? [0, 1, 2, 3]
-            : [0, 1, 2, 2.75, 3.5];
-      for (const [index, offset] of bassOffsets.entries()) {
-        if (offset >= measureBeats) continue;
-        const localHarmony = deriveHarmonyAtBeat(song, measureStart + offset + 0.01);
-        const fifth = 36 + positiveModulo(localHarmony.rootPitchClass + 7, 12);
-        const midi = index % 4 === 2 ? fifth : localHarmony.bassMidi;
+      arrangement.bass.forEach((step, index) => {
+        const beat = snappedMeasureBeat(measureStart, measureBeats, step.at);
         addEvent(events, song, startBeat, endBeat, {
           kind: "bass",
-          beat: measureStart + offset,
-          durationBeats: meter.compound
-            ? meter.pulseBeats * 0.62
-            : isTriple
-              ? meter.pulseBeats * 0.82
-              : song.difficulty >= 4
-                ? 0.58
-                : 0.78,
-          velocity: intensity * (index === 0 ? 0.74 : 0.61),
-          midi: index === 0 ? voicing.bassMidi : midi,
-        });
-      }
+          beat,
+          durationBeats: Math.min(
+            Math.max(0.08, step.duration * measureBeats),
+            measureEnd - beat,
+          ),
+          velocity: intensity * step.velocity,
+          midi: bassMidiForTone(step.tone, harmony, nextHarmony),
+        }, `:${index}`);
+      });
     }
 
     if (includeHarmony) {
-      const harmonyOffsets = meter.compound
-        ? [0, meter.pulseBeats]
-        : isTriple
-        ? [1, 2]
-        : isRock && song.difficulty >= 4
-          ? [0, 1.5, 2, 3.5]
-          : song.difficulty >= 3
-            ? [0, Math.min(2, measureBeats / 2)]
-            : [0];
-      for (const [index, offset] of [...new Set(harmonyOffsets)].entries()) {
-        if (offset >= measureBeats || measureStart + offset >= measureEnd) continue;
-        const voicing = deriveHarmonyAtBeat(song, measureStart + offset + 0.01);
-        const nextOffset = harmonyOffsets[index + 1] ?? measureBeats;
-        const available = Math.max(0.25, nextOffset - offset);
-        const duration = meter.compound
-          ? meter.pulseBeats * 0.72
-          : isTriple
-          ? meter.pulseBeats * 0.62
-          : isRock && song.difficulty >= 4
-            ? 0.42
-            : available * 0.9;
+      arrangement.harmony.forEach((step, index) => {
+        const beat = snappedMeasureBeat(measureStart, measureBeats, step.at);
         addEvent(events, song, startBeat, endBeat, {
           kind: "harmony",
-          beat: measureStart + offset,
-          durationBeats: Math.min(duration, measureEnd - (measureStart + offset)),
-          velocity:
-            intensity *
-            (meter.compound || isTriple ? 0.44 : isCinematic ? 0.48 : 0.4),
-          pitches: voicing.pitches,
-        });
-      }
+          beat,
+          durationBeats: Math.min(
+            Math.max(0.08, step.duration * measureBeats),
+            measureEnd - beat,
+          ),
+          velocity: intensity * step.velocity,
+          pitches,
+        }, `:${index}`);
+      });
     }
   }
 

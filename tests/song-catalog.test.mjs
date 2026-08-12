@@ -12,7 +12,10 @@ const {
 } = await import("../lib/songCatalog.ts");
 const { MIDI_MAX, MIDI_MIN, validateSong } = await import("../lib/songs.ts");
 const { buildSongFingeringGuide } = await import("../lib/fingering.ts");
-const { generateAccompanimentEvents } = await import("../lib/accompaniment.ts");
+const {
+  deriveHarmonyAtBeat,
+  generateAccompanimentEvents,
+} = await import("../lib/accompaniment.ts");
 
 const EXPECTED_LEVELS = ["easy", "medium", "hard"];
 const EXPECTED_FAMILY_COUNT = 35;
@@ -263,6 +266,89 @@ test("Row, Row, Row Your Boat keeps its 6/8 melody and backing in duple pulse", 
   assert.deepEqual(
     band.filter((event) => event.kind === "bass").map((event) => event.beat),
     [0, 1.5],
+  );
+});
+
+test("every career song ships one stable, uniquely named authored band arrangement", () => {
+  const arrangementIds = [];
+  const arrangementNames = [];
+
+  for (const family of SONG_FAMILIES) {
+    const arrangements = EXPECTED_LEVELS.map(
+      (level) => getSongChart(family, level).accompaniment,
+    );
+    assert.ok(arrangements.every(Boolean), `${family.id} needs authored accompaniment`);
+    assert.ok(
+      arrangements.every(
+        (arrangement) => arrangement.arrangementId === family.id,
+      ),
+      `${family.id} arrangement identity must follow the song family`,
+    );
+    assert.deepEqual(
+      arrangements.slice(1),
+      [arrangements[0], arrangements[0]],
+      `${family.id} challenge charts must play with the same band`,
+    );
+    assert.ok(arrangements[0].progression.length > 0);
+    arrangementIds.push(arrangements[0].arrangementId);
+    arrangementNames.push(arrangements[0].name);
+  }
+
+  assertUnique(arrangementIds, "accompaniment arrangement id");
+  assertUnique(arrangementNames, "accompaniment arrangement name");
+});
+
+test("career accompaniment has distinct song-level grooves instead of one preset", () => {
+  const signatures = SONG_FAMILIES.map((family) => {
+    const song = getSongChart(family, "easy");
+    const arrangement = song.accompaniment;
+    return JSON.stringify({
+      drumKit: arrangement.drumKit,
+      bassVoice: arrangement.bassVoice,
+      harmonyVoice: arrangement.harmonyVoice,
+      kick: arrangement.kick,
+      snare: arrangement.snare,
+      hats: arrangement.hats,
+      bass: arrangement.bass,
+      harmony: arrangement.harmony,
+    });
+  });
+
+  assert.ok(
+    new Set(signatures).size >= 30,
+    "the 35-song career should have at least 30 materially distinct band grooves",
+  );
+  assert.equal(
+    getSongChart("minuet-in-g", "easy").accompaniment.drumKit,
+    "none",
+    "chamber music should not receive a generic drum machine",
+  );
+  assert.equal(
+    getSongChart("neon-skyline-finale", "easy").accompaniment.drumKit,
+    "rock",
+  );
+});
+
+test("authored chord progressions drive harmony instead of melody-note guessing", () => {
+  const blues = getSongChart("twelve-bar-neon-blues", "easy");
+  assert.deepEqual(
+    [0, 16, 32].map((beat) => {
+      const harmony = deriveHarmonyAtBeat(blues, beat);
+      return [harmony.symbol, harmony.rootPitchClass, harmony.quality];
+    }),
+    [
+      ["C7", 0, "dominant"],
+      ["F7", 5, "dominant"],
+      ["G7", 7, "dominant"],
+    ],
+  );
+
+  const minuet = getSongChart("minuet-in-g", "easy");
+  assert.equal(
+    generateAccompanimentEvents(minuet, 0, 3).some(
+      (event) => ["kick", "snare", "closed-hat", "open-hat"].includes(event.kind),
+    ),
+    false,
   );
 });
 
