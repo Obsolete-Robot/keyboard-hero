@@ -1237,28 +1237,46 @@ export default function Home() {
             <section
               className={`performance-hud tier-${streakTier}${
                 hero.power.active ? " is-power-mode" : ""
-              }`}
-              aria-label={`Live performance: ${hero.score.points} points, ${hero.score.combo} note streak, ${hero.score.accuracy.toFixed(0)} percent accuracy. ${powerMeterValueText}.`}
+              }${hero.quickLoopEnabled ? " is-quick-loop" : ""}`}
+              aria-label={
+                hero.quickLoopEnabled
+                  ? "Quick loop practice. Scoring is paused and the song restarts automatically."
+                  : `Live performance: ${hero.score.points} points, ${hero.score.combo} note streak, ${hero.score.accuracy.toFixed(0)} percent accuracy. ${powerMeterValueText}.`
+              }
             >
               <div className="performance-card performance-score">
-                <span className="performance-label">Stage score</span>
+                <span className="performance-label">
+                  {hero.quickLoopEnabled ? "Quick loop" : "Stage score"}
+                </span>
                 <div className="score-readout">
                   <strong
                     className="score-value"
-                    key={`score-${hero.score.points}`}
+                    key={
+                      hero.quickLoopEnabled
+                        ? "quick-loop-practice"
+                        : `score-${hero.score.points}`
+                    }
                   >
-                    {hero.score.points.toLocaleString()}
+                    {hero.quickLoopEnabled
+                      ? "PRACTICE"
+                      : hero.score.points.toLocaleString()}
                   </strong>
-                  {scoreDelta > 0 && (
+                  {!hero.quickLoopEnabled && scoreDelta > 0 && (
                     <span className="score-delta" key={`delta-${feedbackKey}`}>
                       +{scoreDelta.toLocaleString()}
                     </span>
                   )}
                 </div>
                 <span className="performance-subline">
-                  {hero.score.hits} notes landed
-                  {hero.score.sustainPoints > 0 &&
-                    ` // +${hero.score.sustainPoints.toLocaleString()} sustain`}
+                  {hero.quickLoopEnabled ? (
+                    "No score // auto restart"
+                  ) : (
+                    <>
+                      {hero.score.hits} notes landed
+                      {hero.score.sustainPoints > 0 &&
+                        ` // +${hero.score.sustainPoints.toLocaleString()} sustain`}
+                    </>
+                  )}
                 </span>
               </div>
 
@@ -1270,10 +1288,16 @@ export default function Home() {
               >
                 <div className="power-meter-head">
                   <span>
-                    {hero.power.active ? "Power Mode" : "Combo energy"}
+                    {hero.quickLoopEnabled
+                      ? "Scoring paused"
+                      : hero.power.active
+                        ? "Power Mode"
+                        : "Combo energy"}
                   </span>
                   <strong>
-                    {hero.power.active
+                    {hero.quickLoopEnabled
+                      ? "LOOPING"
+                      : hero.power.active
                       ? `${hero.power.multiplier}× score`
                       : `${powerChargePercent}%`}
                   </strong>
@@ -1292,7 +1316,9 @@ export default function Home() {
                 </span>
                 <div className="power-meter-foot">
                   <span>
-                    {hero.power.active
+                    {hero.quickLoopEnabled
+                      ? "Full song restarts automatically"
+                      : hero.power.active
                       ? "You earned the spotlight — stay clean"
                       : "Correct hits fill the meter"}
                   </span>
@@ -1304,7 +1330,9 @@ export default function Home() {
                     }
                     role={hero.power.active ? "timer" : undefined}
                   >
-                    {hero.power.active
+                    {hero.quickLoopEnabled
+                      ? "No score"
+                      : hero.power.active
                       ? `${hero.power.remainingBeats.toFixed(1)} beats`
                       : `${hero.score.combo}× streak`}
                   </strong>
@@ -1388,7 +1416,9 @@ export default function Home() {
               aria-atomic="true"
             >
               {celebration
-                ? `${celebration.headline} ${celebration.detail} Score ${hero.score.points}. Streak ${hero.score.combo}. Accuracy ${hero.score.accuracy.toFixed(0)} percent.`
+                ? hero.quickLoopEnabled
+                  ? `${celebration.headline} ${celebration.detail} Quick loop practice; scoring is paused.`
+                  : `${celebration.headline} ${celebration.detail} Score ${hero.score.points}. Streak ${hero.score.combo}. Accuracy ${hero.score.accuracy.toFixed(0)} percent.`
                 : "Stage ready."}
             </p>
 
@@ -1415,10 +1445,17 @@ export default function Home() {
               <div className="timeline">
                 <div className="timeline-track" />
                 <div className="timeline-progress" style={{ width: `${progress}%` }} />
-                {hero.loop.enabled && (
+                {(hero.loop.enabled || hero.quickLoopEnabled) && (
                   <div
-                    className="timeline-loop"
-                    style={{ left: `${loopStart}%`, width: `${Math.max(0, loopEnd - loopStart)}%` }}
+                    className={`timeline-loop${hero.quickLoopEnabled ? " is-quick-loop" : ""}`}
+                    style={
+                      hero.quickLoopEnabled
+                        ? { left: "0%", width: "100%" }
+                        : {
+                            left: `${loopStart}%`,
+                            width: `${Math.max(0, loopEnd - loopStart)}%`,
+                          }
+                    }
                   />
                 )}
                 <input
@@ -1523,8 +1560,25 @@ export default function Home() {
                   aria-label="Toggle practice loop"
                   className={`icon-button${hero.loop.enabled ? " active" : ""}`}
                   onClick={hero.toggleLoop}
+                  title="Loop the selected A/B section"
                 >
                   <Repeat2 size={16} />
+                </button>
+                <button
+                  aria-label={
+                    hero.quickLoopEnabled
+                      ? "Turn off quick loop"
+                      : "Turn on quick loop without scoring"
+                  }
+                  aria-pressed={hero.quickLoopEnabled}
+                  className={`icon-button quick-loop-button${
+                    hero.quickLoopEnabled ? " active" : ""
+                  }`}
+                  onClick={hero.toggleQuickLoop}
+                  title="Quick loop: restart the full song with no score"
+                >
+                  <Repeat2 size={16} />
+                  <span aria-hidden="true">∞</span>
                 </button>
               </div>
             </div>
@@ -2082,7 +2136,7 @@ export default function Home() {
         </aside>
       </div>
 
-      {songComplete && (
+      {songComplete && !hero.quickLoopEnabled && (
         <PerformanceResults
           noteResults={hero.noteResults}
           onPractice={hero.restart}

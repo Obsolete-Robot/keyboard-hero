@@ -1795,6 +1795,12 @@ input:focus-visible {
   pointer-events: none;
 }
 
+.timeline-loop.is-quick-loop {
+  border-color: var(--acid);
+  background: rgba(215, 255, 63, 0.13);
+  box-shadow: inset 0 0 12px rgba(215, 255, 63, 0.08);
+}
+
 .timeline-marker {
   position: absolute;
   top: 8px;
@@ -1890,6 +1896,25 @@ input:focus-visible {
   border-color: var(--violet);
   background: rgba(141, 104, 255, 0.16);
   color: #bba9ff;
+}
+
+.quick-loop-button {
+  position: relative;
+}
+
+.quick-loop-button span {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  color: currentColor;
+  font: 800 9px/1 var(--font-mono);
+}
+
+.quick-loop-button.active {
+  border-color: var(--acid);
+  background: rgba(215, 255, 63, 0.14);
+  color: var(--acid);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.08), 0 0 14px rgba(215, 255, 63, 0.14);
 }
 
 .ab-button {
