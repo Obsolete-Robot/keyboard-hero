@@ -1,6 +1,12 @@
 const KEYBOARD_MIDI_MIN = 48;
 const KEYBOARD_MIDI_MAX = 72;
 
+export interface MIDICalibrationMapping {
+  rawNote: number;
+  rightRawNote: number;
+  transpose: number;
+}
+
 /** Maps a raw device pitch into the 25-key curriculum without clamping. */
 export function mapMIDINoteToKeyboardRange(
   rawMidi: number,
@@ -31,4 +37,35 @@ export function isValidMIDICalibrationSpan(
     rightRaw <= 127 &&
     rightRaw - leftRaw === KEYBOARD_MIDI_MAX - KEYBOARD_MIDI_MIN
   );
+}
+
+/** Validates an alignment loaded from browser storage before it is trusted. */
+export function parseMIDICalibrationMapping(
+  value: unknown,
+): MIDICalibrationMapping | null {
+  if (!value || typeof value !== "object") return null;
+
+  const candidate = value as Partial<MIDICalibrationMapping>;
+  const { rawNote, rightRawNote, transpose } = candidate;
+  if (
+    typeof rawNote !== "number" ||
+    typeof rightRawNote !== "number" ||
+    typeof transpose !== "number" ||
+    !isValidMIDICalibrationSpan(rawNote, rightRawNote) ||
+    !Number.isInteger(transpose) ||
+    transpose !== KEYBOARD_MIDI_MIN - rawNote
+  ) {
+    return null;
+  }
+
+  return { rawNote, rightRawNote, transpose };
+}
+
+/** Recovers a writable per-device record from potentially corrupt JSON data. */
+export function normalizeMIDICalibrationEntries(
+  value: unknown,
+): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
 }

@@ -19,6 +19,9 @@ const HIT_Z = -0.72;
 const FAR_Z = -19.5;
 const TRAVEL_DISTANCE = HIT_Z - FAR_Z;
 const POST_HIT_BEATS = 1.45;
+const NOTE_GAP_MIN = 0.055;
+const AIM_SPARK_COUNT = 16;
+const AIM_RENDER_ORDER = 1200;
 const BLACK_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 
 export type KeyboardNoteState =
@@ -39,6 +42,8 @@ export interface KeyboardStageNote {
   /** Optional MIDI velocity, 0–1. It influences brightness and height. */
   velocity?: number;
   state?: KeyboardNoteState;
+  /** Optional authoritative sustain completion, from 0 to 1. */
+  holdProgress?: number;
   /** Optional per-note color override as any Three.js-compatible CSS color. */
   color?: string;
   hand?: "left" | "right";
@@ -128,12 +133,31 @@ interface KeyVisual extends KeyLayout {
 
 interface NoteVisual {
   group: THREE.Group;
-  body: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
-  glow: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
-  flare: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
+  body: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshStandardMaterial>;
+  glow: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshBasicMaterial>;
+  flare: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshBasicMaterial>;
+  outline: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial>;
+  headCap: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  tailCap: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   bodyMaterial: THREE.MeshStandardMaterial;
   glowMaterial: THREE.MeshBasicMaterial;
   flareMaterial: THREE.MeshBasicMaterial;
+  outlineMaterial: THREE.LineBasicMaterial;
+  capMaterial: THREE.MeshBasicMaterial;
+}
+
+type AimMarkerTone = "held" | "matched" | "miss";
+
+interface AimMarkerVisual {
+  midi: number;
+  group: THREE.Group;
+  whiteRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  colorRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  core: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  sparks: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  sparkSeeds: Float32Array;
+  sparkColors: THREE.BufferAttribute;
+  tone: AimMarkerTone | null;
 }
 
 interface FeedbackBurst {
@@ -207,6 +231,36 @@ const THEME_PRESETS: Record<KeyboardStageThemeName, KeyboardStagePalette> = {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function makeRoundedNoteGeometry() {
+  const radius = 0.16;
+  const half = 0.5;
+  const shape = new THREE.Shape();
+  shape.moveTo(-half + radius, -half);
+  shape.lineTo(half - radius, -half);
+  shape.quadraticCurveTo(half, -half, half, -half + radius);
+  shape.lineTo(half, half - radius);
+  shape.quadraticCurveTo(half, half, half - radius, half);
+  shape.lineTo(-half + radius, half);
+  shape.quadraticCurveTo(-half, half, -half, half - radius);
+  shape.lineTo(-half, -half + radius);
+  shape.quadraticCurveTo(-half, -half, -half + radius, -half);
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    // Depth plus the two 0.025 bevel shoulders stays exactly one unit, so
+    // scaling cannot eat the authored gap between adjacent notes.
+    depth: 0.95,
+    steps: 1,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    bevelSize: 0.025,
+    bevelThickness: 0.025,
+    curveSegments: 5,
+  });
+  geometry.translate(0, 0, -0.475);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function resolvePalette(theme: KeyboardStageTheme): KeyboardStagePalette {
@@ -374,7 +428,39 @@ export default function KeyboardStage({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const strikeZoneRef = useRef<HTMLDivElement>(null);
+  const nextNoteStartById = useMemo(() => {
+    const byMidi = new Map<number, KeyboardStageNote[]>();
+    notes.forEach((note) => {
+      const laneNotes = byMidi.get(note.midi) ?? [];
+      laneNotes.push(note);
+      byMidi.set(note.midi, laneNotes);
+    });
+    const result = new Map<string | number, number>();
+    byMidi.forEach((laneNotes) => {
+      laneNotes.sort((left, right) => left.startBeat - right.startBeat);
+      let nextDistinctStart: number | undefined;
+      for (let end = laneNotes.length - 1; end >= 0; ) {
+        const groupStartBeat = laneNotes[end].startBeat;
+        let begin = end;
+        while (
+          begin > 0 &&
+          Math.abs(laneNotes[begin - 1].startBeat - groupStartBeat) <= 1e-6
+        ) {
+          begin -= 1;
+        }
+        if (nextDistinctStart !== undefined) {
+          for (let index = begin; index <= end; index += 1) {
+            result.set(laneNotes[index].id, nextDistinctStart);
+          }
+        }
+        nextDistinctStart = groupStartBeat;
+        end = begin - 1;
+      }
+    });
+    return result;
+  }, [notes]);
   const notesRef = useRef(notes);
+  const nextNoteStartRef = useRef(nextNoteStartById);
   const currentBeatRef = useRef(currentBeat);
   const currentTimeRef = useRef(currentTime);
   const pressedRef = useRef(pressedMidiNotes);
@@ -393,6 +479,7 @@ export default function KeyboardStage({
 
   useEffect(() => {
     notesRef.current = notes;
+    nextNoteStartRef.current = nextNoteStartById;
     currentBeatRef.current = currentBeat;
     currentTimeRef.current = currentTime;
     pressedRef.current = pressedMidiNotes;
@@ -405,6 +492,7 @@ export default function KeyboardStage({
     onReadyRef.current = onReady;
   }, [
     notes,
+    nextNoteStartById,
     currentBeat,
     currentTime,
     pressedMidiNotes,
@@ -816,6 +904,121 @@ export default function KeyboardStage({
       });
     });
 
+    const aimWhiteRingGeometry = new THREE.RingGeometry(0.115, 0.205, 40);
+    const aimColorRingGeometry = new THREE.RingGeometry(0.21, 0.29, 40);
+    const aimCoreGeometry = new THREE.CircleGeometry(0.047, 24);
+    const aimMarkers: AimMarkerVisual[] = KEY_LAYOUT.map((key, keyIndex) => {
+      const group = new THREE.Group();
+      group.name = `held-aim-${key.midi}`;
+      group.position.set(key.x, 0.19, HIT_Z);
+      group.visible = false;
+
+      const whiteMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.98,
+        blending: THREE.AdditiveBlending,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
+      const whiteRing = new THREE.Mesh(aimWhiteRingGeometry, whiteMaterial);
+      whiteRing.name = "held-aim-white-ring";
+      whiteRing.rotation.x = -Math.PI / 2;
+      whiteRing.renderOrder = AIM_RENDER_ORDER + 2;
+      whiteRing.frustumCulled = false;
+      group.add(whiteRing);
+
+      const colorMaterial = new THREE.MeshBasicMaterial({
+        color: laneColor(key.midi),
+        transparent: true,
+        opacity: 0.72,
+        blending: THREE.AdditiveBlending,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
+      const colorRing = new THREE.Mesh(aimColorRingGeometry, colorMaterial);
+      colorRing.name = "held-aim-color-ring";
+      colorRing.rotation.x = -Math.PI / 2;
+      colorRing.position.y = -0.008;
+      colorRing.renderOrder = AIM_RENDER_ORDER + 1;
+      colorRing.frustumCulled = false;
+      group.add(colorRing);
+
+      const coreMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.92,
+        blending: THREE.AdditiveBlending,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
+      const core = new THREE.Mesh(aimCoreGeometry, coreMaterial);
+      core.name = "held-aim-core";
+      core.rotation.x = -Math.PI / 2;
+      core.position.y = 0.006;
+      core.renderOrder = AIM_RENDER_ORDER + 3;
+      core.frustumCulled = false;
+      group.add(core);
+
+      const sparkPositions = new Float32Array(AIM_SPARK_COUNT * 3);
+      const sparkColorValues = new Float32Array(AIM_SPARK_COUNT * 3);
+      const sparkSeeds = new Float32Array(AIM_SPARK_COUNT * 3);
+      for (let index = 0; index < AIM_SPARK_COUNT; index += 1) {
+        const offset = index * 3;
+        sparkSeeds[offset] =
+          (index / AIM_SPARK_COUNT) * Math.PI * 2 + keyIndex * 0.31;
+        sparkSeeds[offset + 1] = ((index * 7 + keyIndex * 3) % 17) / 17;
+        sparkSeeds[offset + 2] = 0.72 + ((index * 5 + keyIndex) % 9) / 12;
+        new THREE.Color(index % 2 === 0 ? 0xffffff : laneColor(key.midi)).toArray(
+          sparkColorValues,
+          offset,
+        );
+      }
+      const sparkGeometry = new THREE.BufferGeometry();
+      sparkGeometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(sparkPositions, 3),
+      );
+      const sparkColors = new THREE.BufferAttribute(sparkColorValues, 3);
+      sparkGeometry.setAttribute("color", sparkColors);
+      const sparkMaterial = new THREE.PointsMaterial({
+        color: 0xffffff,
+        vertexColors: true,
+        size: 0.065,
+        transparent: true,
+        opacity: 0.82,
+        blending: THREE.AdditiveBlending,
+        depthTest: false,
+        depthWrite: false,
+        sizeAttenuation: true,
+        toneMapped: false,
+      });
+      const sparks = new THREE.Points(sparkGeometry, sparkMaterial);
+      sparks.name = "held-aim-sparks";
+      sparks.renderOrder = AIM_RENDER_ORDER + 4;
+      sparks.frustumCulled = false;
+      group.add(sparks);
+
+      world.add(group);
+      return {
+        midi: key.midi,
+        group,
+        whiteRing,
+        colorRing,
+        core,
+        sparks,
+        sparkSeeds,
+        sparkColors,
+        tone: null,
+      };
+    });
+
     const padMaterials: THREE.MeshStandardMaterial[] = [];
     for (let index = 0; index < 8; index += 1) {
       const column = index % 4;
@@ -951,11 +1154,14 @@ export default function KeyboardStage({
     ambientParticles.visible = !reduceMotion;
     world.add(ambientParticles);
 
-    const noteGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const noteGeometry = makeRoundedNoteGeometry();
+    const noteOutlineGeometry = new THREE.EdgesGeometry(noteGeometry, 28);
+    const noteCapGeometry = new THREE.CircleGeometry(0.5, 28);
     const noteVisuals = new Map<string | number, NoteVisual>();
     const feedbackBursts: FeedbackBurst[] = [];
     const successFlare = new Float32Array(KEY_COUNT);
     const missFlare = new Float32Array(KEY_COUNT);
+    const matchedHoldStrength = new Float32Array(KEY_COUNT);
     const pointerNotes = new Map<number, number>();
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -989,20 +1195,54 @@ export default function KeyboardStage({
         depthWrite: false,
         side: THREE.DoubleSide,
       });
+      const outlineMaterial = new THREE.LineBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.58,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const capMaterial = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.78,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
       const group = new THREE.Group();
       const glow = new THREE.Mesh(noteGeometry, glowMaterial);
       const flare = new THREE.Mesh(noteGeometry, flareMaterial);
       const bodyMesh = new THREE.Mesh(noteGeometry, bodyMaterialForNote);
-      group.add(flare, glow, bodyMesh);
+      const outline = new THREE.LineSegments(
+        noteOutlineGeometry,
+        outlineMaterial,
+      );
+      const headCap = new THREE.Mesh(noteCapGeometry, capMaterial);
+      const tailCap = new THREE.Mesh(noteCapGeometry, capMaterial);
+      flare.renderOrder = 17;
+      glow.renderOrder = 18;
+      bodyMesh.renderOrder = 20;
+      outline.renderOrder = 23;
+      headCap.renderOrder = 24;
+      tailCap.renderOrder = 24;
+      group.add(flare, glow, bodyMesh, outline, headCap, tailCap);
       world.add(group);
       const visual: NoteVisual = {
         group,
         body: bodyMesh,
         glow,
         flare,
+        outline,
+        headCap,
+        tailCap,
         bodyMaterial: bodyMaterialForNote,
         glowMaterial,
         flareMaterial,
+        outlineMaterial,
+        capMaterial,
       };
       noteVisuals.set(note.id, visual);
       return visual;
@@ -1015,6 +1255,8 @@ export default function KeyboardStage({
       visual.bodyMaterial.dispose();
       visual.glowMaterial.dispose();
       visual.flareMaterial.dispose();
+      visual.outlineMaterial.dispose();
+      visual.capMaterial.dispose();
       noteVisuals.delete(id);
     };
 
@@ -1283,6 +1525,36 @@ export default function KeyboardStage({
       if (event.powerActivation && !reduceMotion) powerSurge = 1;
     };
 
+    const setAimMarkerTone = (
+      marker: AimMarkerVisual,
+      tone: AimMarkerTone,
+    ) => {
+      if (marker.tone === tone) return;
+      marker.tone = tone;
+      const lane = new THREE.Color(laneColor(marker.midi));
+      const accent = new THREE.Color(
+        tone === "miss"
+          ? paletteRef.current.miss
+          : tone === "matched"
+            ? paletteRef.current.success
+            : laneColor(marker.midi),
+      );
+      marker.colorRing.material.color.copy(
+        tone === "matched" ? lane : accent,
+      );
+      const colors = marker.sparkColors.array as Float32Array;
+      for (let index = 0; index < AIM_SPARK_COUNT; index += 1) {
+        const color =
+          index % 3 === 0
+            ? new THREE.Color(0xffffff)
+            : index % 3 === 1
+              ? accent
+              : lane;
+        color.toArray(colors, index * 3);
+      }
+      marker.sparkColors.needsUpdate = true;
+    };
+
     const drawDisplay = () => {
       if (!displayContext) return;
       const activeCount = KEY_LAYOUT.reduce(
@@ -1345,6 +1617,9 @@ export default function KeyboardStage({
         key.landingMaterial.color.set(key.laneColor);
         key.laneMaterial.color.set(key.laneColor);
       });
+      aimMarkers.forEach((marker) => {
+        marker.tone = null;
+      });
       padMaterials.forEach((material, index) => {
         const color = index % 2
           ? activePalette.secondary
@@ -1389,6 +1664,21 @@ export default function KeyboardStage({
         if (burst.shockwave) burst.shockwave.visible = false;
         if (burst.streaks) burst.streaks.visible = false;
         if (burst.fracture) burst.fracture.visible = false;
+      });
+      aimMarkers.forEach((marker) => {
+        marker.group.scale.setScalar(1);
+        const positions = marker.sparks.geometry.attributes.position
+          .array as Float32Array;
+        for (let spark = 0; spark < AIM_SPARK_COUNT; spark += 1) {
+          const offset = spark * 3;
+          const angle = marker.sparkSeeds[offset];
+          const progress = marker.sparkSeeds[offset + 1];
+          const radius = 0.12 + progress * 0.18;
+          positions[offset] = Math.cos(angle) * radius;
+          positions[offset + 1] = 0.025 + progress * 0.14;
+          positions[offset + 2] = Math.sin(angle) * radius * 0.72;
+        }
+        marker.sparks.geometry.attributes.position.needsUpdate = true;
       });
 
       const baseCameraZ =
@@ -1577,6 +1867,8 @@ export default function KeyboardStage({
         if (event) createFeedbackBurst(event);
       }
 
+      matchedHoldStrength.fill(0);
+
       beatLines.forEach((line, index) => {
         const deltaBeat = (1 - beatFraction) % 1 + index;
         line.position.z = HIT_Z - (deltaBeat / visibleBeats) * TRAVEL_DISTANCE;
@@ -1608,10 +1900,27 @@ export default function KeyboardStage({
         visual.group.visible = true;
         const key = KEY_LAYOUT[note.midi - FIRST_MIDI_NOTE];
         const noteWidth = key.width * (key.isBlack ? 0.8 : 0.82);
-        const length = Math.max(
-          0.27,
-          (durationBeats / visibleBeats) * TRAVEL_DISTANCE,
+        const nextStartBeat = nextNoteStartRef.current.get(note.id);
+        const separatedDuration =
+          nextStartBeat !== undefined
+            ? Math.min(
+                durationBeats,
+                Math.max(0.045, nextStartBeat - note.startBeat),
+              )
+            : durationBeats;
+        const unseparatedLength = Math.max(
+          0.14,
+          (separatedDuration / visibleBeats) * TRAVEL_DISTANCE,
         );
+        const separationGap = Math.min(
+          unseparatedLength * 0.28,
+          clamp(
+            (TRAVEL_DISTANCE / visibleBeats) * 0.04,
+            NOTE_GAP_MIN,
+            0.15,
+          ),
+        );
+        const length = Math.max(0.08, unseparatedLength - separationGap);
         const headZ =
           HIT_Z - ((note.startBeat - beat) / visibleBeats) * TRAVEL_DISTANCE;
         const velocity = clamp(note.velocity ?? 0.82, 0.1, 1);
@@ -1621,16 +1930,33 @@ export default function KeyboardStage({
         const pressedNow =
           hasMidi(pressedRef.current, note.midi) ||
           pressedByPointer.has(note.midi);
-        const nearbyPress =
-          pressedNow && Math.abs(note.startBeat - beat) < 0.35;
         const sustaining =
           durationBeats >= 0.45 &&
           beat >= note.startBeat - 0.08 &&
           beat <= tailBeat + 0.08 &&
           (pressedNow || note.state === "active");
         if (sustaining) sustainedMidi.add(note.midi);
-        const hitBoost = nearbyPress || note.state === "active" ? 1.55 : 1;
         const missed = note.state === "missed";
+        const matchedHold =
+          pressedNow && !missed && note.state === "active";
+        const holdStrength = matchedHold
+          ? reduceMotion
+            ? 0.82
+            : clamp(
+                0.68 + clamp(note.holdProgress ?? 0.5, 0, 1) * 0.32,
+                0.68,
+                1,
+              )
+          : 0;
+        matchedHoldStrength[keyIndex] = Math.max(
+          matchedHoldStrength[keyIndex],
+          holdStrength,
+        );
+        const hitBoost = matchedHold
+          ? 1.72
+          : note.state === "active"
+            ? 1.55
+            : 1;
         const renderedColor = missed ? paletteRef.current.miss : color;
         const motionFlare = reduceMotion ? 0 : successEnergy;
         const powerNoteBoost = missed
@@ -1642,47 +1968,66 @@ export default function KeyboardStage({
           key.isBlack ? 0.7 : 0.48,
           headZ - length / 2,
         );
-        visual.body.scale.set(
-          noteWidth,
+        const bodyHeight =
           (0.12 + velocity * 0.11) *
-            hitBoost *
-            (1 +
-              motionFlare * 0.3 +
-              (sustaining ? 0.12 : 0) +
-              powerNoteBoost * 0.08),
-          length,
-        );
+          hitBoost *
+          (1 +
+            motionFlare * 0.3 +
+            (sustaining ? 0.12 : 0) +
+            powerNoteBoost * 0.08 +
+            holdStrength * 0.1);
+        const haloLength = length + Math.min(0.07, separationGap * 0.46);
+        visual.body.scale.set(noteWidth, bodyHeight, length);
         visual.glow.scale.set(
-          noteWidth * (1.45 + motionFlare * 0.7 + powerNoteBoost * 0.32),
-          0.36 + motionFlare * 0.16 + powerNoteBoost * 0.08,
-          length + 0.22 + (sustaining ? 0.32 : 0),
+          noteWidth *
+            (1.42 +
+              motionFlare * 0.7 +
+              powerNoteBoost * 0.32 +
+              holdStrength * 0.28),
+          0.34 +
+            motionFlare * 0.16 +
+            powerNoteBoost * 0.08 +
+            holdStrength * 0.08,
+          haloLength,
         );
         visual.flare.scale.set(
           noteWidth *
-            (1.7 +
+            (1.64 +
               motionFlare * 0.88 +
               (sustaining ? 0.46 : 0) +
-              powerNoteBoost * 0.48),
-          0.45 + motionFlare * 0.18 + powerNoteBoost * 0.12,
-          length +
-            0.42 +
-            (sustaining ? 0.72 : 0) +
-            powerNoteBoost * 0.24,
+              powerNoteBoost * 0.48 +
+              holdStrength * 0.5),
+          0.42 +
+            motionFlare * 0.18 +
+            powerNoteBoost * 0.12 +
+            holdStrength * 0.12,
+          haloLength + Math.min(0.025, separationGap * 0.16),
         );
+        visual.outline.scale.set(
+          noteWidth * 1.025,
+          bodyHeight * 1.035,
+          length * 1.003,
+        );
+        visual.headCap.position.set(0, 0, length / 2 + 0.007);
+        visual.tailCap.position.set(0, 0, -length / 2 - 0.007);
+        visual.headCap.scale.set(noteWidth * 0.98, bodyHeight * 1.02, 1);
+        visual.tailCap.scale.copy(visual.headCap.scale);
         visual.bodyMaterial.color.set(renderedColor);
         visual.bodyMaterial.emissive.set(renderedColor);
         visual.bodyMaterial.emissiveIntensity =
           (missed ? 0.8 : 2.25 + velocity * 1.1) * hitBoost +
           successEnergy * 9 +
           (sustaining ? 3.2 : 0) +
-          powerNoteBoost * 4.2;
+          powerNoteBoost * 4.2 +
+          holdStrength * 7.2;
         visual.bodyMaterial.opacity = missed ? 0.46 : 0.96;
         visual.glowMaterial.color.set(renderedColor);
         visual.glowMaterial.opacity = clamp(
           (missed ? 0.06 : 0.14 + activeIntensity * 0.05) * hitBoost +
             successEnergy * 0.48 +
             (sustaining ? 0.24 : 0) +
-            powerNoteBoost * 0.12,
+            powerNoteBoost * 0.12 +
+            holdStrength * 0.3,
           0.04,
           0.92,
         );
@@ -1690,9 +2035,26 @@ export default function KeyboardStage({
         visual.flareMaterial.opacity = clamp(
           (sustaining ? 0.2 : 0) +
             successEnergy * 0.34 +
-            powerNoteBoost * 0.1,
+            powerNoteBoost * 0.1 +
+            holdStrength * 0.28,
           0,
           0.66,
+        );
+        visual.outlineMaterial.color.set(
+          missed ? paletteRef.current.miss : 0xffffff,
+        );
+        visual.outlineMaterial.opacity = clamp(
+          (missed ? 0.3 : 0.52) +
+            successEnergy * 0.16 +
+            holdStrength * 0.34,
+          0.22,
+          0.96,
+        );
+        visual.capMaterial.color.set(renderedColor);
+        visual.capMaterial.opacity = clamp(
+          (missed ? 0.4 : 0.7) + successEnergy * 0.12 + holdStrength * 0.2,
+          0.32,
+          0.96,
         );
       });
 
@@ -1705,6 +2067,7 @@ export default function KeyboardStage({
           hasMidi(pressedRef.current, key.midi) || pressedByPointer.has(key.midi);
         const hitEnergy = successFlare[index];
         const missedEnergy = missFlare[index];
+        const holdMatch = matchedHoldStrength[index];
         const sustaining = sustainedMidi.has(key.midi);
         const targetY = key.baseY - (active ? 0.055 : 0);
         key.mesh.position.y += (targetY - key.mesh.position.y) * 0.32;
@@ -1722,6 +2085,7 @@ export default function KeyboardStage({
             hitEnergy * 10 +
             missedEnergy * 2.8 +
             (sustaining ? 3.4 : 0) +
+            holdMatch * 8.4 +
             powerEnergy * (1.15 + powerPulse * 0.9) -
             key.material.emissiveIntensity) *
           0.3;
@@ -1734,6 +2098,7 @@ export default function KeyboardStage({
             hitEnergy * 0.96,
             missedEnergy * 0.62,
             sustaining ? 0.48 : 0,
+            holdMatch * 0.98,
             powerEnergy * (0.07 + powerPulse * 0.05),
           ) -
             key.landingMaterial.opacity) *
@@ -1751,12 +2116,65 @@ export default function KeyboardStage({
             hitEnergy * 0.42 +
             missedEnergy * 0.25 +
             (sustaining ? 0.12 : 0) +
+            holdMatch * 0.34 +
             powerEnergy * (0.045 + powerPulse * 0.035) -
             key.laneMaterial.opacity) *
           0.28;
         if (!reduceMotion && (active || hitEnergy > 0.08 || sustaining)) {
           key.landingMaterial.opacity *=
             0.86 + Math.sin(now * 0.012 + index) * 0.14;
+        }
+
+        const marker = aimMarkers[index];
+        marker.group.visible = active;
+        if (active) {
+          const tone: AimMarkerTone =
+            missedEnergy > 0.08
+              ? "miss"
+              : holdMatch > 0
+                ? "matched"
+                : "held";
+          setAimMarkerTone(marker, tone);
+          const matchedEnergy = tone === "matched" ? holdMatch : 0;
+          const motionPulse = reduceMotion
+            ? 0
+            : Math.sin(now * 0.009 + index * 0.73) * 0.055;
+          marker.group.scale.setScalar(
+            1 + motionPulse + matchedEnergy * (reduceMotion ? 0.1 : 0.18),
+          );
+          marker.whiteRing.material.opacity =
+            tone === "matched" ? 1 : tone === "miss" ? 0.94 : 0.98;
+          marker.colorRing.material.opacity =
+            tone === "matched" ? 0.98 : tone === "miss" ? 0.82 : 0.62;
+          marker.core.material.opacity = tone === "matched" ? 1 : 0.9;
+          marker.core.scale.setScalar(1 + matchedEnergy * 0.42);
+          marker.sparks.material.opacity =
+            tone === "matched" ? 1 : tone === "miss" ? 0.86 : 0.74;
+          marker.sparks.material.size =
+            0.06 + matchedEnergy * 0.035 + (tone === "miss" ? 0.008 : 0);
+
+          const positions = marker.sparks.geometry.attributes.position
+            .array as Float32Array;
+          for (let spark = 0; spark < AIM_SPARK_COUNT; spark += 1) {
+            const offset = spark * 3;
+            const seedAngle = marker.sparkSeeds[offset];
+            const seedPhase = marker.sparkSeeds[offset + 1];
+            const speed = marker.sparkSeeds[offset + 2];
+            const progress = reduceMotion
+              ? seedPhase
+              : (seedPhase + now * 0.00072 * speed) % 1;
+            const spin = reduceMotion
+              ? 0
+              : now * 0.00078 * (spark % 2 === 0 ? 1 : -1);
+            const radius =
+              0.12 + progress * (0.18 + matchedEnergy * 0.15);
+            positions[offset] = Math.cos(seedAngle + spin) * radius;
+            positions[offset + 1] =
+              0.025 + progress * (0.14 + matchedEnergy * 0.18);
+            positions[offset + 2] =
+              Math.sin(seedAngle + spin) * radius * 0.72;
+          }
+          marker.sparks.geometry.attributes.position.needsUpdate = true;
         }
         successFlare[index] *= Math.pow(0.028, deltaSeconds);
         missFlare[index] *= Math.pow(0.006, deltaSeconds);
@@ -1981,6 +2399,8 @@ export default function KeyboardStage({
       pointerNotes.forEach((midi) => onKeyUpRef.current?.(midi));
       disposeObject(scene);
       noteGeometry.dispose();
+      noteOutlineGeometry.dispose();
+      noteCapGeometry.dispose();
       whiteGeometry.dispose();
       blackGeometry.dispose();
       landingGeometry.dispose();

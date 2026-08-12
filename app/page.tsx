@@ -31,9 +31,17 @@ import KeyboardStage, {
 } from "@/components/KeyboardStage";
 import PerformanceResults from "@/components/PerformanceResults";
 import {
+  TrainingCoach,
+  TrainingLauncher,
+  TrainingRoom,
+  type TrainingProgress,
+} from "@/components/TrainingArea";
+import {
   useKeyboardHeroCore,
   type NoteFeedback,
+  type SustainFeedback,
 } from "@/hooks/useKeyboardHeroCore";
+import { resolveMIDITransportIntent } from "@/lib/midiTransport";
 import {
   SONGS,
   getSongDurationSeconds,
@@ -41,6 +49,18 @@ import {
   type Song,
   type SongSection,
 } from "@/lib/songs";
+import {
+  TRAINING_LESSONS,
+  TRAINING_SONGS,
+  TRAINING_STORAGE_KEY,
+  getNextTrainingLanding,
+  getNotesInSection,
+  getTrainingLessonBySongId,
+  getTrainingSection,
+  type TrainingLesson,
+} from "@/lib/training";
+
+const PLAYABLE_SONGS: readonly Song[] = [...SONGS, ...TRAINING_SONGS];
 
 function formatTime(seconds: number) {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
@@ -115,8 +135,11 @@ function performanceCelebration(
     };
   }
   const offset = Math.round(Math.abs(feedback.offsetMs));
-  const timingDirection =
-    offset <= 8 ? "Dead center" : `${offset}ms ${feedback.offsetMs < 0 ? "early" : "late"}`;
+  const timingDirection = feedback.earlyCaptured
+    ? "Early catch held to the line"
+    : offset <= 8
+      ? "Dead center"
+      : `${offset}ms ${feedback.offsetMs < 0 ? "early" : "late"}`;
 
   if (feedback.grade === "miss") {
     return {
@@ -194,6 +217,37 @@ function performanceCelebration(
     headline: "Landed",
     detail: "Stay in it. Smooth beats rushed.",
     tone: "good",
+    variant: "judgement",
+  };
+}
+
+function sustainCelebration(feedback: SustainFeedback): CelebrationCopy {
+  const progress = Math.round(feedback.progress * 100);
+  const points = feedback.pointsAwarded.toLocaleString();
+
+  if (feedback.grade === "full") {
+    return {
+      eyebrow: `Full sustain // +${points}`,
+      headline: "Hold locked!",
+      detail: `${feedback.heldBeats.toFixed(1)} beats ringing clean.`,
+      tone: "perfect",
+      variant: "judgement",
+    };
+  }
+  if (feedback.grade === "partial") {
+    return {
+      eyebrow: `Sustain ${progress}% // +${points}`,
+      headline: "Keep it singing",
+      detail: "Good hold. Stay down through the full note tail.",
+      tone: "good",
+      variant: "judgement",
+    };
+  }
+  return {
+    eyebrow: `Released at ${progress}% // +${points}`,
+    headline: "Hold it longer",
+    detail: "Keep the key down until the note tail clears the line.",
+    tone: "miss",
     variant: "judgement",
   };
 }
@@ -358,31 +412,125 @@ function SongLibrary({
 export default function Home() {
   const [songId, setSongId] = useState(SONGS[0].id);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [trainingOpen, setTrainingOpen] = useState(false);
+  const [trainingSectionId, setTrainingSectionId] = useState<string | null>(null);
+  const [trainingProgress, setTrainingProgress] = useState<TrainingProgress>({});
+  const [trainingProgressReady, setTrainingProgressReady] = useState(false);
+  const [pendingTrainingSetup, setPendingTrainingSetup] = useState<{
+    songId: string;
+    sectionId: string;
+  } | null>(null);
   const closeLibrary = useCallback(() => setLibraryOpen(false), []);
+  const closeTraining = useCallback(() => setTrainingOpen(false), []);
   const song = useMemo(
-    () => SONGS.find((candidate) => candidate.id === songId) ?? SONGS[0],
+    () =>
+      PLAYABLE_SONGS.find((candidate) => candidate.id === songId) ?? SONGS[0],
     [songId],
   );
+  const activeTrainingLesson = useMemo(
+    () => getTrainingLessonBySongId(song.id),
+    [song.id],
+  );
+  const activeTrainingSection = activeTrainingLesson
+    ? getTrainingSection(activeTrainingLesson, trainingSectionId)
+    : null;
   const hero = useKeyboardHeroCore(song);
   const pauseForLibrary = hero.pause;
   const openLibrary = useCallback(() => {
     pauseForLibrary();
+    setTrainingOpen(false);
     setLibraryOpen(true);
+  }, [pauseForLibrary]);
+  const openTraining = useCallback(() => {
+    pauseForLibrary();
+    setLibraryOpen(false);
+    setTrainingOpen(true);
   }, [pauseForLibrary]);
   const isFinishing = hero.isFinishing;
   const songComplete = hero.songComplete;
   const positionBeatRef = useRef(hero.positionBeat);
+  const lastRegularSongIdRef = useRef(SONGS[0].id);
+  const trainingReturnBackingBandRef = useRef(
+    hero.settings.backingBandEnabled,
+  );
+  const previousTrainingFrameRef = useRef<{
+    isPlaying: boolean;
+    misses: number;
+    hits: number;
+    accuracy: number;
+    positionBeat: number;
+    sectionId: string | null;
+    songId: string;
+  } | null>(null);
+  const handledMIDITransportSequenceRef = useRef(0);
   const togglePlayFromKey = hero.togglePlay;
+  const playFromMIDI = hero.play;
+  const restartFromMIDI = hero.restart;
   const rewindFromKey = hero.rewindBeats;
   const seekFromKey = hero.seekBeat;
+  const setBackingBandForTraining = hero.setBackingBandEnabled;
+  const setLoopForTraining = hero.setLoop;
+  const setModeForTraining = hero.setPracticeMode;
+  const setTempoForTraining = hero.setTempoScale;
+  const backingBandEnabledForTraining = hero.settings.backingBandEnabled;
 
   useEffect(() => {
     positionBeatRef.current = hero.positionBeat;
   }, [hero.positionBeat]);
 
   useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      const nextProgress: TrainingProgress = {};
+      try {
+        const stored = JSON.parse(
+          window.localStorage.getItem(TRAINING_STORAGE_KEY) ?? "{}",
+        ) as unknown;
+        if (stored && typeof stored === "object") {
+          for (const lesson of TRAINING_LESSONS) {
+            const storedLesson = (stored as Record<string, unknown>)[lesson.id];
+            if (!storedLesson || typeof storedLesson !== "object") continue;
+            for (const section of lesson.song.sections) {
+              const value = Number(
+                (storedLesson as Record<string, unknown>)[section.id],
+              );
+              if (!Number.isFinite(value) || value <= 0) continue;
+              nextProgress[lesson.id] ??= {};
+              nextProgress[lesson.id][section.id] = Math.min(
+                lesson.song.pedagogy.mastery.cleanRuns,
+                Math.floor(value),
+              );
+            }
+          }
+        }
+      } catch {
+        // Device-local progress is optional in restricted/private browser modes.
+      }
+      if (!cancelled) {
+        setTrainingProgress(nextProgress);
+        setTrainingProgressReady(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!trainingProgressReady) return;
+    try {
+      window.localStorage.setItem(
+        TRAINING_STORAGE_KEY,
+        JSON.stringify(trainingProgress),
+      );
+    } catch {
+      // The training room remains fully usable when storage is unavailable.
+    }
+  }, [trainingProgress, trainingProgressReady]);
+
+  useEffect(() => {
     const handleTransportKeys = (event: globalThis.KeyboardEvent) => {
-      if (libraryOpen || songComplete) return;
+      if (libraryOpen || trainingOpen || songComplete) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -407,10 +555,36 @@ export default function Home() {
     };
     window.addEventListener("keydown", handleTransportKeys);
     return () => window.removeEventListener("keydown", handleTransportKeys);
-  }, [libraryOpen, rewindFromKey, seekFromKey, songComplete, togglePlayFromKey]);
+  }, [
+    libraryOpen,
+    rewindFromKey,
+    seekFromKey,
+    songComplete,
+    togglePlayFromKey,
+    trainingOpen,
+  ]);
 
-  const activeSection = currentSection(song, hero.positionBeat);
+  const activeSection =
+    activeTrainingSection ?? currentSection(song, hero.positionBeat);
   const nextNote = nextSongNote(song, hero.positionBeat);
+  const nextTrainingLanding = useMemo(
+    () =>
+      activeTrainingLesson && activeTrainingSection
+        ? getNextTrainingLanding(
+            song,
+            hero.positionBeat,
+            new Set(hero.noteResults.keys()),
+            activeTrainingSection,
+          )
+        : null,
+    [
+      activeTrainingLesson,
+      activeTrainingSection,
+      hero.noteResults,
+      hero.positionBeat,
+      song,
+    ],
+  );
   const coach = modeCopy(hero.settings.practiceMode);
   const totalSeconds = getSongDurationSeconds(song, hero.settings.tempoScale);
   const noteApproachBeats = Math.max(
@@ -420,6 +594,85 @@ export default function Home() {
   const progress = Math.min(100, (hero.positionBeat / song.durationBeats) * 100);
   const loopStart = Math.min(100, (hero.loop.startBeat / song.durationBeats) * 100);
   const loopEnd = Math.min(100, (hero.loop.endBeat / song.durationBeats) * 100);
+  const activeTrainingCleanRuns =
+    activeTrainingLesson && activeTrainingSection
+      ? (trainingProgress[activeTrainingLesson.id]?.[
+          activeTrainingSection.id
+        ] ?? 0)
+      : 0;
+
+  useEffect(() => {
+    const currentFrame = {
+      isPlaying: hero.isPlaying,
+      misses: hero.score.misses,
+      hits: hero.score.hits,
+      accuracy: hero.score.accuracy,
+      positionBeat: hero.positionBeat,
+      sectionId: activeTrainingSection?.id ?? null,
+      songId: song.id,
+    };
+    const previousFrame = previousTrainingFrameRef.current;
+    previousTrainingFrameRef.current = currentFrame;
+
+    if (
+      !activeTrainingLesson ||
+      !activeTrainingSection ||
+      !hero.loop.enabled ||
+      !hero.isPlaying ||
+      !previousFrame?.isPlaying ||
+      previousFrame.songId !== song.id ||
+      previousFrame.sectionId !== activeTrainingSection.id
+    ) {
+      return;
+    }
+
+    const wrapped =
+      previousFrame.positionBeat > hero.positionBeat &&
+      previousFrame.positionBeat >= hero.loop.endBeat - 0.35 &&
+      hero.positionBeat <= hero.loop.startBeat + 0.35;
+    if (!wrapped || hero.settings.practiceMode === "listen") return;
+
+    const sectionNoteCount = getNotesInSection(
+      song,
+      activeTrainingSection,
+    ).length;
+    const clean =
+      previousFrame.hits >= sectionNoteCount &&
+      previousFrame.misses === 0 &&
+      previousFrame.accuracy >=
+        song.pedagogy.mastery.accuracyPercent;
+    if (!clean) return;
+
+    setTrainingProgress((current) => {
+      const lessonProgress = current[activeTrainingLesson.id] ?? {};
+      const existing = lessonProgress[activeTrainingSection.id] ?? 0;
+      const nextRuns = Math.min(
+        song.pedagogy.mastery.cleanRuns,
+        existing + 1,
+      );
+      if (nextRuns === existing) return current;
+      return {
+        ...current,
+        [activeTrainingLesson.id]: {
+          ...lessonProgress,
+          [activeTrainingSection.id]: nextRuns,
+        },
+      };
+    });
+  }, [
+    activeTrainingLesson,
+    activeTrainingSection,
+    hero.isPlaying,
+    hero.loop.enabled,
+    hero.loop.endBeat,
+    hero.loop.startBeat,
+    hero.positionBeat,
+    hero.score.accuracy,
+    hero.score.hits,
+    hero.score.misses,
+    hero.settings.practiceMode,
+    song,
+  ]);
   const latestFeedbackGroup = useMemo(() => {
     const latestGroupId = hero.latestFeedback?.groupId;
     if (!latestGroupId) return [];
@@ -430,16 +683,38 @@ export default function Home() {
   const hudFeedback =
     latestFeedbackGroup.find((event) => event.powerActivation) ??
     hero.latestFeedback;
-  const celebration = performanceCelebration(hudFeedback, hero.score.combo);
-  const feedbackKey = hudFeedback
-    ? `${hudFeedback.groupId}-${latestFeedbackGroup.length}-${hero.score.hits}-${hero.score.misses}`
-    : "ready";
-  const scoreDelta = latestFeedbackGroup.length
-    ? latestFeedbackGroup.reduce(
+  const latestSustainFeedbackGroup = useMemo(() => {
+    const latestGroupId = hero.latestSustainFeedback?.groupId;
+    if (!latestGroupId) return [];
+    return hero.sustainFeedbackEvents.filter(
+      (event) => event.groupId === latestGroupId,
+    );
+  }, [hero.latestSustainFeedback?.groupId, hero.sustainFeedbackEvents]);
+  const sustainFeedbackIsLatest =
+    (hero.latestSustainFeedback?.sequence ?? -1) >
+    (hero.latestFeedback?.sequence ?? -1);
+  const hudSustainFeedback = sustainFeedbackIsLatest
+    ? (hero.latestSustainFeedback ?? null)
+    : null;
+  const celebration = hudSustainFeedback
+    ? sustainCelebration(hudSustainFeedback)
+    : performanceCelebration(hudFeedback, hero.score.combo);
+  const feedbackKey = hudSustainFeedback
+    ? `${hudSustainFeedback.groupId}-${latestSustainFeedbackGroup.length}-${hudSustainFeedback.sequence}`
+    : hudFeedback
+      ? `${hudFeedback.groupId}-${latestFeedbackGroup.length}-${hero.score.hits}-${hero.score.misses}`
+      : "ready";
+  const scoreDelta = hudSustainFeedback
+    ? latestSustainFeedbackGroup.reduce(
         (total, event) => total + event.pointsAwarded,
         0,
       )
-    : (hero.latestFeedback?.pointsAwarded ?? 0);
+    : latestFeedbackGroup.length
+      ? latestFeedbackGroup.reduce(
+          (total, event) => total + event.pointsAwarded,
+          0,
+        )
+      : (hero.latestFeedback?.pointsAwarded ?? 0);
   const streakTier =
     hero.score.combo >= 25
       ? "rockstar"
@@ -506,8 +781,6 @@ export default function Home() {
     ? "Z–M / Q–I maps C3–C5"
     : hero.midi.calibration.active
       ? `Alignment listening · ${midiCalibrationPrompt.short}`
-    : hero.midi.calibration.needsVerification
-      ? "Keyboard alignment needs verification · choose Verify"
     : !hasMIDIActivity
       ? hero.midi.calibration.calibrated &&
         hero.midi.calibration.rawNote !== null
@@ -557,6 +830,7 @@ export default function Home() {
     () =>
       song.notes.map((note) => {
         const result = hero.noteResults.get(note.id);
+        const heldNote = hero.heldNotes.get(note.id);
         return {
           id: note.id,
           midi: note.midi,
@@ -564,44 +838,178 @@ export default function Home() {
           durationBeats: note.durationBeats,
           velocity: (note.velocity ?? 94) / 127,
           hand: note.hand === "both" ? undefined : note.hand,
-          state: result
-            ? result.grade === "miss"
-              ? "missed"
-              : "hit"
-            : "upcoming",
+          state: heldNote
+            ? "active"
+            : result
+              ? result.grade === "miss"
+                ? "missed"
+                : "hit"
+              : "upcoming",
+          holdProgress: heldNote?.progress,
         };
       }),
-    [hero.noteResults, song],
+    [hero.heldNotes, hero.noteResults, song],
   );
 
   const stageFeedback = useMemo<readonly KeyboardHitFeedback[]>(
     () =>
-      hero.feedbackEvents.map((event) => ({
-        id: event.id,
-        midi: event.midi,
-        kind: event.grade,
-        strength: Math.max(0.45, 1 - Math.abs(event.offsetMs) / 280),
-        powerActivation: event.powerActivation,
-      })),
-    [hero.feedbackEvents],
+      [
+        ...hero.feedbackEvents.map((event) => ({
+          sequence: event.sequence,
+          feedback: {
+            id: event.id,
+            midi: event.midi,
+            kind: event.grade,
+            strength: Math.max(0.45, 1 - Math.abs(event.offsetMs) / 280),
+            powerActivation: event.powerActivation,
+          } satisfies KeyboardHitFeedback,
+        })),
+        ...hero.sustainFeedbackEvents.map((event) => ({
+          sequence: event.sequence,
+          feedback: {
+            id: event.id,
+            midi: event.midi,
+            kind:
+              event.grade === "full"
+                ? "perfect"
+                : event.grade === "partial"
+                  ? "good"
+                  : "miss",
+            strength:
+              event.grade === "full"
+                ? 1.35
+                : event.grade === "partial"
+                  ? 0.82
+                  : 0.68,
+          } satisfies KeyboardHitFeedback,
+        })),
+      ]
+        .sort((left, right) => left.sequence - right.sequence)
+        .map(({ feedback }) => feedback),
+    [hero.feedbackEvents, hero.sustainFeedbackEvents],
   );
+
+  const prepareTrainingSection = useCallback(
+    (
+      section: SongSection,
+      mode: "flow" | "wait" | "listen",
+      startPlaying: boolean,
+    ) => {
+      pauseForLibrary();
+      setLoopForTraining(section.startBeat, section.endBeat, true);
+      seekFromKey(section.startBeat);
+      setTempoForTraining((section.recommendedTempoPercent ?? 45) / 100);
+      setBackingBandForTraining(false);
+      setModeForTraining(mode);
+      if (startPlaying && mode !== "listen") playFromMIDI();
+    },
+    [
+      pauseForLibrary,
+      playFromMIDI,
+      seekFromKey,
+      setBackingBandForTraining,
+      setLoopForTraining,
+      setModeForTraining,
+      setTempoForTraining,
+    ],
+  );
+
+  const startTrainingLesson = useCallback(
+    (lesson: TrainingLesson) => {
+      pauseForLibrary();
+      if (!activeTrainingLesson) {
+        lastRegularSongIdRef.current = song.id;
+        trainingReturnBackingBandRef.current =
+          backingBandEnabledForTraining;
+      }
+      setTrainingSectionId(lesson.defaultSectionId);
+      setPendingTrainingSetup({
+        songId: lesson.song.id,
+        sectionId: lesson.defaultSectionId,
+      });
+      setSongId(lesson.song.id);
+      setTrainingOpen(false);
+      setLibraryOpen(false);
+    },
+    [
+      activeTrainingLesson,
+      backingBandEnabledForTraining,
+      pauseForLibrary,
+      song.id,
+    ],
+  );
+
+  const returnToSongs = useCallback(() => {
+    pauseForLibrary();
+    setBackingBandForTraining(trainingReturnBackingBandRef.current);
+    setSongId(lastRegularSongIdRef.current);
+    setTrainingSectionId(null);
+    setPendingTrainingSetup(null);
+  }, [pauseForLibrary, setBackingBandForTraining]);
 
   const selectSong = useCallback(
     (nextSong: Song) => {
-      hero.pause();
+      pauseForLibrary();
+      if (activeTrainingLesson) {
+        setBackingBandForTraining(trainingReturnBackingBandRef.current);
+      }
+      lastRegularSongIdRef.current = nextSong.id;
       setSongId(nextSong.id);
+      setTrainingSectionId(null);
+      setPendingTrainingSetup(null);
       setLibraryOpen(false);
     },
-    [hero],
+    [activeTrainingLesson, pauseForLibrary, setBackingBandForTraining],
+  );
+
+  const selectTrainingSection = useCallback(
+    (section: SongSection) => {
+      setTrainingSectionId(section.id);
+      prepareTrainingSection(section, "wait", false);
+    },
+    [prepareTrainingSection],
   );
 
   const selectSection = useCallback(
     (section: SongSection) => {
-      hero.setLoop(section.startBeat, section.endBeat, true);
-      hero.seekBeat(section.startBeat);
+      if (activeTrainingLesson) {
+        selectTrainingSection(section);
+        return;
+      }
+      if (section.recommendedTempoPercent) {
+        setTempoForTraining(section.recommendedTempoPercent / 100);
+      }
+      setLoopForTraining(section.startBeat, section.endBeat, true);
+      seekFromKey(section.startBeat);
     },
-    [hero],
+    [
+      activeTrainingLesson,
+      seekFromKey,
+      selectTrainingSection,
+      setLoopForTraining,
+      setTempoForTraining,
+    ],
   );
+
+  useEffect(() => {
+    if (!pendingTrainingSetup || song.id !== pendingTrainingSetup.songId) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const lesson = getTrainingLessonBySongId(pendingTrainingSetup.songId);
+      if (lesson) {
+        const section = getTrainingSection(
+          lesson,
+          pendingTrainingSetup.sectionId,
+        );
+        prepareTrainingSection(section, lesson.defaultMode, false);
+      }
+      setPendingTrainingSetup(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingTrainingSetup, prepareTrainingSection, song.id]);
 
   const seekFromTimeline = (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
@@ -609,10 +1017,44 @@ export default function Home() {
     hero.seekBeat(nextBeat);
   };
 
-  const replaySong = () => {
-    hero.restart();
-    hero.play();
-  };
+  const replaySong = useCallback(() => {
+    restartFromMIDI();
+    playFromMIDI();
+  }, [playFromMIDI, restartFromMIDI]);
+
+  const closeActiveOverlay = useCallback(() => {
+    if (trainingOpen) closeTraining();
+    else closeLibrary();
+  }, [closeLibrary, closeTraining, trainingOpen]);
+
+  const midiTransportEvent = hero.midi.lastTransportEvent;
+  useEffect(() => {
+    if (
+      !midiTransportEvent ||
+      midiTransportEvent.sequence <= handledMIDITransportSequenceRef.current
+    ) {
+      return;
+    }
+    handledMIDITransportSequenceRef.current = midiTransportEvent.sequence;
+
+    const intent = resolveMIDITransportIntent(midiTransportEvent.action, {
+      songComplete,
+      overlayOpen: libraryOpen || trainingOpen,
+    });
+    if (intent === "replay") replaySong();
+    else if (intent === "toggle-play") togglePlayFromKey();
+    else if (intent === "back-to-practice") restartFromMIDI();
+    else if (intent === "close-overlay") queueMicrotask(closeActiveOverlay);
+  }, [
+    closeActiveOverlay,
+    libraryOpen,
+    midiTransportEvent,
+    replaySong,
+    restartFromMIDI,
+    songComplete,
+    togglePlayFromKey,
+    trainingOpen,
+  ]);
 
   return (
     <main className="app-shell">
@@ -627,14 +1069,17 @@ export default function Home() {
 
         <div className="song-selector">
           <div className="song-selector-copy">
-            <div className="song-selector-label">Now learning</div>
+            <div className="song-selector-label">
+              {activeTrainingLesson ? "Training room" : "Now learning"}
+            </div>
             <div className="song-selector-title">{song.title}</div>
             <div className="song-selector-meta">
               {song.level} · {song.key} · {song.timeSignature[0]}/{song.timeSignature[1]}
             </div>
           </div>
           <button className="library-button" onClick={openLibrary}>
-            Library <ChevronDown size={11} aria-hidden="true" />
+            {activeTrainingLesson ? "Songs" : "Library"}{" "}
+            <ChevronDown size={11} aria-hidden="true" />
           </button>
         </div>
 
@@ -658,8 +1103,19 @@ export default function Home() {
               {midiDeviceHint}
             </span>
           </div>
-          <button className="connect-button" onClick={hero.connectMIDI}>
-            <Usb size={13} aria-hidden="true" /> <span>Connect MIDI</span>
+          <button
+            className="connect-button"
+            disabled={hero.midi.permission === "prompt"}
+            onClick={hero.connectMIDI}
+          >
+            <Usb size={13} aria-hidden="true" />
+            <span>
+              {hero.midi.connectedName
+                ? "Reconnect MIDI"
+                : hero.midi.permission === "prompt"
+                  ? "Connecting…"
+                  : "Connect MIDI"}
+            </span>
           </button>
         </div>
       </header>
@@ -729,6 +1185,8 @@ export default function Home() {
                 </div>
                 <span className="performance-subline">
                   {hero.score.hits} notes landed
+                  {hero.score.sustainPoints > 0 &&
+                    ` // +${hero.score.sustainPoints.toLocaleString()} sustain`}
                 </span>
               </div>
 
@@ -987,8 +1445,39 @@ export default function Home() {
           </div>
         </section>
 
-        <aside className="coach-panel" aria-label="Piano coach">
-          <section className="coach-section">
+        <aside
+          className={`coach-panel${activeTrainingLesson ? " is-training" : ""}`}
+          aria-label={activeTrainingLesson ? "Guided piano training coach" : "Piano coach"}
+        >
+          {activeTrainingLesson && activeTrainingSection ? (
+            <TrainingCoach
+              cleanRuns={activeTrainingCleanRuns}
+              isPlaying={hero.isPlaying}
+              lesson={activeTrainingLesson}
+              mode={hero.settings.practiceMode}
+              nextLanding={nextTrainingLanding}
+              noteResults={hero.noteResults}
+              onExit={returnToSongs}
+              onHear={() =>
+                prepareTrainingSection(activeTrainingSection, "listen", true)
+              }
+              onNavigateLesson={startTrainingLesson}
+              onOpenRoadmap={openTraining}
+              onPractice={() =>
+                prepareTrainingSection(activeTrainingSection, "wait", true)
+              }
+              onSelectSection={selectTrainingSection}
+              onTest={() =>
+                prepareTrainingSection(activeTrainingSection, "flow", true)
+              }
+              pressedNotes={hero.pressedNotes}
+              section={activeTrainingSection}
+              tempoPercent={Math.round(hero.settings.tempoScale * 100)}
+            />
+          ) : (
+            <>
+              <TrainingLauncher onOpen={openTraining} />
+              <section className="coach-section">
             <div className="section-kicker">
               Practice mode <strong>Live coach</strong>
             </div>
@@ -1053,6 +1542,8 @@ export default function Home() {
               </div>
             </div>
           </section>
+            </>
+          )}
 
           <section
             aria-labelledby="backing-band-heading"
@@ -1291,10 +1782,6 @@ export default function Home() {
                 hero.midi.calibration.active ? " is-listening" : ""
               }${
                 hero.midi.calibration.calibrated ? " is-calibrated" : ""
-              }${
-                hero.midi.calibration.needsVerification
-                  ? " needs-verification"
-                  : ""
               }${hero.midi.calibration.error ? " has-error" : ""}`}
               role="group"
             >
@@ -1324,11 +1811,7 @@ export default function Home() {
                     onClick={hero.startMIDICalibration}
                     type="button"
                   >
-                    {hero.midi.calibration.needsVerification
-                      ? "Verify"
-                      : hero.midi.calibration.calibrated
-                        ? "Re-align"
-                        : "Align"}
+                    {hero.midi.calibration.calibrated ? "Re-align" : "Align"}
                   </button>
                 )}
               </div>
@@ -1387,21 +1870,6 @@ export default function Home() {
                       </div>
                     </div>
                   </div>
-                ) : hero.midi.calibration.needsVerification ? (
-                  <div className="midi-align-verification" role="status">
-                    <strong>Verify this saved alignment</strong>
-                    <span>
-                      The keyboard reconnected or its setup may have changed.
-                      Choose Verify and play both end keys again.
-                    </span>
-                    <button
-                      className="midi-align-reset"
-                      onClick={hero.resetMIDICalibration}
-                      type="button"
-                    >
-                      <RotateCcw size={10} aria-hidden="true" /> Reset instead
-                    </button>
-                  </div>
                 ) : hero.midi.calibration.calibrated &&
                   hero.midi.calibration.rawNote !== null ? (
                   <div className="midi-align-success">
@@ -1453,7 +1921,7 @@ export default function Home() {
               </div>
               {!hero.midi.calibration.active && (
                 <p className="midi-align-footnote">
-                  Re-align after MPK Octave, KTrans, or preset changes.
+                  Saved automatically for this MIDI input. Re-align after MPK Octave, KTrans, or preset changes.
                 </p>
               )}
             </div>
@@ -1511,6 +1979,15 @@ export default function Home() {
           activeSong={song}
           onClose={closeLibrary}
           onSelect={selectSong}
+        />
+      )}
+
+      {trainingOpen && (
+        <TrainingRoom
+          activeLessonId={activeTrainingLesson?.id}
+          onClose={closeTraining}
+          onSelect={startTrainingLesson}
+          progress={trainingProgress}
         />
       )}
 

@@ -146,10 +146,17 @@ export function buildPerformanceReport(
   mode: PracticeMode,
 ): PerformanceReport {
   const counts = { perfect: 0, great: 0, good: 0, miss: 0 };
+  const sustainCounts = { full: 0, partial: 0, earlyRelease: 0 };
 
   for (const note of song.notes) {
     const result = noteResults.get(note.id);
-    if (result) counts[result.grade] += 1;
+    if (!result) continue;
+    counts[result.grade] += 1;
+    if (result.sustain?.grade === "full") sustainCounts.full += 1;
+    else if (result.sustain?.grade === "partial") sustainCounts.partial += 1;
+    else if (result.sustain?.grade === "early-release") {
+      sustainCounts.earlyRelease += 1;
+    }
   }
 
   const attempts = counts.perfect + counts.great + counts.good + counts.miss;
@@ -158,7 +165,11 @@ export function buildPerformanceReport(
   const missedOrUnplayed = counts.miss + unplayed + extraMisses;
   const basePoints =
     counts.perfect * 1000 + counts.great * 700 + counts.good * 450;
-  const streakBonus = Math.max(0, score.points - basePoints);
+  const sustainPoints = Math.max(0, score.sustainPoints);
+  const streakBonus = Math.max(
+    0,
+    score.points - basePoints - sustainPoints,
+  );
   const weightedTiming =
     counts.perfect * TIMING_WEIGHTS.perfect +
     counts.great * TIMING_WEIGHTS.great +
@@ -192,6 +203,16 @@ export function buildPerformanceReport(
       detail: `${counts.miss} missed · ${unplayed} unplayed · ${extraMisses} extras`,
       points: 0,
       tone: "miss",
+    },
+    {
+      label: "Sustain bonus",
+      detail:
+        sustainCounts.full + sustainCounts.partial + sustainCounts.earlyRelease >
+        0
+          ? `${sustainCounts.full} full · ${sustainCounts.partial} partial · ${sustainCounts.earlyRelease} early release`
+          : "No scored holds",
+      points: sustainPoints,
+      tone: "bonus",
     },
     {
       label: "Streak bonus",
