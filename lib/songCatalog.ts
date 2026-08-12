@@ -72,11 +72,34 @@ interface PublicDomainTheme {
 }
 
 const EPSILON = 0.000_001;
+const MIN_FULL_PLAYTHROUGH_SECONDS = 60;
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
 
 const roundBeat = (beat: number): number => Math.round(beat * 1_000_000) / 1_000_000;
+
+const fullPlaythroughPasses = (
+  passDurationBeats: number,
+  bpm: number,
+  preferredPasses = 1,
+): number =>
+  Math.max(
+    preferredPasses,
+    Math.ceil((MIN_FULL_PLAYTHROUGH_SECONDS * bpm) / (60 * passDurationBeats)),
+  );
+
+const repeatArrangement = (
+  notes: readonly NoteSeed[],
+  passDurationBeats: number,
+  passes: number,
+): NoteSeed[] =>
+  Array.from({ length: passes }, (_, passIndex) =>
+    notes.map((note) => ({
+      ...note,
+      startBeat: roundBeat(note.startBeat + passIndex * passDurationBeats),
+    })),
+  ).flat();
 
 const beatsPerMeasure = (signature: readonly [number, number]): number =>
   signature[0] * (4 / signature[1]);
@@ -266,6 +289,29 @@ const buildSections = (
   return result;
 };
 
+const buildPerformanceSections = (
+  familyId: string,
+  labels: readonly string[],
+  passDurationBeats: number,
+  challenge: ChallengeLevel,
+): SongSection[] =>
+  labels.map((label, index) => ({
+    id: `${familyId}-${challenge}-performance-${index + 1}`,
+    label,
+    startBeat: roundBeat(index * passDurationBeats),
+    endBeat: roundBeat((index + 1) * passDurationBeats),
+    focus:
+      index === labels.length - 1
+        ? "Keep your technique relaxed and finish the complete song cleanly."
+        : challenge === "easy"
+          ? "Keep the melody and pulse consistent across the full song."
+          : challenge === "medium"
+            ? "Keep the melody clear while sustaining the accompaniment through the form."
+            : "Balance the full voicing without losing energy across the form.",
+    recommendedTempoPercent: challenge === "easy" ? 80 : challenge === "medium" ? 65 : 50,
+    repeatCount: challenge === "easy" ? 2 : challenge === "medium" ? 3 : 4,
+  }));
+
 const chartSkills = (
   challenge: ChallengeLevel,
   focus: string,
@@ -320,6 +366,10 @@ interface ChartBase {
   origin: Song["origin"];
   attribution: string;
   durationBeats: number;
+  /** Length of one authored pass before full-song endurance repeats. */
+  performancePassBeats?: number;
+  /** Named top-level form shown across the full-song timeline. */
+  performanceSectionLabels?: readonly string[];
   notes: readonly NoteSeed[];
   courseRank: number;
   focus: string;
@@ -329,6 +379,9 @@ interface ChartBase {
 const createChart = (base: ChartBase, challenge: ChallengeLevel): SongChart => {
   const chartId = challenge === "medium" ? base.familyId : `${base.familyId}-${challenge}`;
   const careerTier = careerTierFor(base.courseRank);
+  const performanceCopy = base.performanceSectionLabels?.length
+    ? ` Full-length ${base.performanceSectionLabels.length}-part performance.`
+    : "";
   const chart: SongChart = {
     id: chartId,
     familyId: base.familyId,
@@ -343,16 +396,23 @@ const createChart = (base: ChartBase, challenge: ChallengeLevel): SongChart => {
     difficulty: displayDifficultyFor(base.courseRank, challenge),
     level: `${base.courseRank} · ${careerTier} · ${challenge[0].toUpperCase()}${challenge.slice(1)}`,
     skills: chartSkills(challenge, base.focus),
-    description: `${base.subtitle}. ${challenge === "easy" ? "One-hand melody chart." : challenge === "medium" ? "Two-hand chart with bass anchors and selected chord hits." : "Full-piano challenge adapted to the 25-key range."}`,
+    description: `${base.subtitle}. ${challenge === "easy" ? "One-hand melody chart." : challenge === "medium" ? "Two-hand chart with bass anchors and selected chord hits." : "Full-piano challenge adapted to the 25-key range."}${performanceCopy}`,
     durationBeats: base.durationBeats,
     notes: dedupeAndIdentify(chartId, base.notes),
     sections:
-      base.sourceSections?.map((section, index) => ({
+      base.performancePassBeats && base.performanceSectionLabels?.length
+        ? buildPerformanceSections(
+            base.familyId,
+            base.performanceSectionLabels,
+            base.performancePassBeats,
+            challenge,
+          )
+        : base.sourceSections?.map((section, index) => ({
         ...section,
         id: `${chartId}-section-${index + 1}`,
         recommendedTempoPercent:
           challenge === "easy" ? 80 : challenge === "medium" ? 65 : 50,
-      })) ?? buildSections(base.familyId, base.durationBeats, base.timeSignature, challenge),
+          })) ?? buildSections(base.familyId, base.durationBeats, base.timeSignature, challenge),
     key: base.key,
     timeSignature: base.timeSignature,
     style: base.style,
@@ -517,17 +577,35 @@ const arrangePublicDomainTheme = (
   theme: PublicDomainTheme,
   courseRank: number,
 ): SongFamily => {
-  const repeats = theme.repeats ?? 2;
-  const melody = melodySeedsFromSteps(
+  const authoredRepeats = theme.repeats ?? 2;
+  const melodyPass = melodySeedsFromSteps(
     theme.melody,
-    repeats,
+    authoredRepeats,
     theme.articulation ?? "normal",
   );
   const measureBeats = beatsPerMeasure(theme.timeSignature);
-  const durationBeats = roundBeat(
-    Math.ceil(melody.durationBeats / measureBeats) * measureBeats,
+  const performancePassBeats = roundBeat(
+    Math.ceil(melodyPass.durationBeats / measureBeats) * measureBeats,
   );
-  const easy = melody.notes;
+  const performancePasses = fullPlaythroughPasses(
+    performancePassBeats,
+    theme.bpm,
+  );
+  const performanceSectionLabels = Array.from(
+    { length: performancePasses },
+    (_, index) =>
+      index === performancePasses - 1
+        ? "Final Pass"
+        : index === 0
+          ? "Opening"
+          : `Part ${index + 1}`,
+  );
+  const durationBeats = roundBeat(performancePassBeats * performancePasses);
+  const easy = repeatArrangement(
+    melodyPass.notes,
+    performancePassBeats,
+    performancePasses,
+  );
   const medium = addMediumHarmony(easy, durationBeats, theme.timeSignature, theme.harmony);
   const hard = addHardHarmony(easy, durationBeats, theme.timeSignature, theme.harmony);
 
@@ -544,6 +622,8 @@ const arrangePublicDomainTheme = (
       origin: "public-domain",
       attribution: `Public-domain composition; original Keyboard Hero 25-key arrangement.`,
       durationBeats,
+      performancePassBeats,
+      performanceSectionLabels,
       courseRank,
       focus: theme.focus,
     },
@@ -608,12 +688,45 @@ const LEGACY_HARMONY: Readonly<Record<string, readonly HarmonySymbol[]>> = {
   "neon-skyline-finale": ["C", "Am", "F", "G"],
 };
 
+const LEGACY_PREFERRED_PASSES: Readonly<Record<string, number>> = {
+  // The traditional song has four sung verses over the same complete melody.
+  "marys-two-hand-march": 4,
+};
+
+const legacyPerformanceLabels = (songId: string, passes: number): string[] => {
+  if (songId === "marys-two-hand-march") {
+    return ["Verse 1", "Verse 2", "Verse 3", "Final Verse"];
+  }
+  return Array.from({ length: passes }, (_, index) =>
+    index === passes - 1
+      ? "Final Pass"
+      : index === 0
+        ? "Opening"
+        : `Part ${index + 1}`,
+  );
+};
+
 const arrangeLegacySong = (song: Song, courseRank: number): SongFamily => {
   const progression = LEGACY_HARMONY[song.id] ?? ["C", "F", "G7", "C"];
-  const easy = melodyFromLegacy(song);
-  const original = normalizedLegacyNotes(song);
-  const medium = addMediumHarmony(original, song.durationBeats, song.timeSignature, progression);
-  const hard = addHardHarmony(original, song.durationBeats, song.timeSignature, progression);
+  const performancePasses = fullPlaythroughPasses(
+    song.durationBeats,
+    song.bpm,
+    LEGACY_PREFERRED_PASSES[song.id],
+  );
+  const durationBeats = roundBeat(song.durationBeats * performancePasses);
+  const performanceSectionLabels = legacyPerformanceLabels(song.id, performancePasses);
+  const easy = repeatArrangement(
+    melodyFromLegacy(song),
+    song.durationBeats,
+    performancePasses,
+  );
+  const original = repeatArrangement(
+    normalizedLegacyNotes(song),
+    song.durationBeats,
+    performancePasses,
+  );
+  const medium = addMediumHarmony(original, durationBeats, song.timeSignature, progression);
+  const hard = addHardHarmony(original, durationBeats, song.timeSignature, progression);
 
   return buildFamily(
     {
@@ -627,7 +740,9 @@ const arrangeLegacySong = (song: Song, courseRank: number): SongFamily => {
       style: song.style,
       origin: song.origin,
       attribution: song.attribution,
-      durationBeats: song.durationBeats,
+      durationBeats,
+      performancePassBeats: song.durationBeats,
+      performanceSectionLabels,
       courseRank,
       focus: song.skills[0] ?? "musical control",
       sourceSections: song.sections,

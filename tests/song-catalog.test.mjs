@@ -71,6 +71,10 @@ function assertUnique(values, label) {
   }
 }
 
+function durationSeconds(song) {
+  return (song.durationBeats * 60) / song.bpm;
+}
+
 function challengeRatingFor(family, level, song, allCatalogEntry) {
   const chartMetadata = chartMetadataForLevel(family, level);
   return (
@@ -171,6 +175,65 @@ test("Easy charts stay one-handed and monophonic", () => {
       groupLandings(song).every((landing) => landing.length === 1),
       `${song.id} must contain at most one note per landing`,
     );
+  }
+});
+
+test("career charts are full-length endurance playthroughs", () => {
+  for (const family of SONG_FAMILIES) {
+    const durations = EXPECTED_LEVELS.map(
+      (level) => getSongChart(family, level).durationBeats,
+    );
+    assert.equal(
+      new Set(durations).size,
+      1,
+      `${family.id} challenge levels must share one full-song form`,
+    );
+
+    for (const level of EXPECTED_LEVELS) {
+      const song = getSongChart(family, level);
+      assert.ok(
+        durationSeconds(song) >= 60,
+        `${song.id} must last at least one minute at 100% tempo`,
+      );
+      assert.equal(song.sections[0].startBeat, 0, `${song.id} sections must start at zero`);
+      assert.equal(
+        song.sections.at(-1).endBeat,
+        song.durationBeats,
+        `${song.id} sections must cover the complete playthrough`,
+      );
+      for (const section of song.sections) {
+        assert.ok(
+          song.notes.some(
+            (note) =>
+              note.startBeat >= section.startBeat && note.startBeat < section.endBeat,
+          ),
+          `${song.id}/${section.id} must contain playable chart notes`,
+        );
+      }
+    }
+  }
+});
+
+test("Mary plays all four complete verse passes", () => {
+  const mary = getSongChart("marys-two-hand-march", "easy");
+  assert.equal(mary.durationBeats, 128);
+  assert.deepEqual(
+    mary.sections.map((section) => section.label),
+    ["Verse 1", "Verse 2", "Verse 3", "Final Verse"],
+  );
+
+  const attacksForPass = (passIndex) =>
+    mary.notes
+      .filter(
+        (note) =>
+          note.startBeat >= passIndex * 32 && note.startBeat < (passIndex + 1) * 32,
+      )
+      .map((note) => [note.midi, note.startBeat - passIndex * 32, note.durationBeats]);
+
+  const firstVerse = attacksForPass(0);
+  assert.ok(firstVerse.length > 0);
+  for (let passIndex = 1; passIndex < 4; passIndex += 1) {
+    assert.deepEqual(attacksForPass(passIndex), firstVerse);
   }
 });
 
