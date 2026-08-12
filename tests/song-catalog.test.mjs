@@ -12,6 +12,7 @@ const {
 } = await import("../lib/songCatalog.ts");
 const { MIDI_MAX, MIDI_MIN, validateSong } = await import("../lib/songs.ts");
 const { buildSongFingeringGuide } = await import("../lib/fingering.ts");
+const { generateAccompanimentEvents } = await import("../lib/accompaniment.ts");
 
 const EXPECTED_LEVELS = ["easy", "medium", "hard"];
 const EXPECTED_FAMILY_COUNT = 35;
@@ -235,6 +236,34 @@ test("Mary plays all four complete verse passes", () => {
   for (let passIndex = 1; passIndex < 4; passIndex += 1) {
     assert.deepEqual(attacksForPass(passIndex), firstVerse);
   }
+});
+
+test("Row, Row, Row Your Boat keeps its 6/8 melody and backing in duple pulse", () => {
+  const row = getSongChart("row-row-row-your-boat", "easy");
+  assert.deepEqual(row.timeSignature, [6, 8]);
+  assert.deepEqual(
+    row.notes
+      .filter((note) => note.startBeat < 24)
+      .map((note) => [note.midi, note.startBeat]),
+    [
+      [60, 0], [60, 1.5], [60, 3], [62, 4], [64, 4.5],
+      [64, 6], [62, 7], [64, 7.5], [65, 8.5], [67, 9],
+      [72, 12], [72, 12.5], [72, 13], [67, 13.5], [67, 14],
+      [67, 14.5], [64, 15], [64, 15.5], [64, 16], [60, 16.5],
+      [60, 17], [60, 17.5],
+      [67, 18], [65, 19], [64, 19.5], [62, 20.5], [60, 21],
+    ],
+  );
+
+  const band = generateAccompanimentEvents(row, 0, 3);
+  assert.deepEqual(
+    band.filter((event) => event.kind === "snare").map((event) => event.beat),
+    [1.5],
+  );
+  assert.deepEqual(
+    band.filter((event) => event.kind === "bass").map((event) => event.beat),
+    [0, 1.5],
+  );
 });
 
 test("Medium charts use both hands and introduce chord landings", () => {

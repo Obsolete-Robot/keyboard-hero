@@ -14,6 +14,11 @@ import {
   powerAmount,
   shapePowerVelocity,
 } from "../lib/audioPower.ts";
+import {
+  isDownbeatPulse,
+  meterGrid,
+  pulseIndexAtBeat,
+} from "../lib/meter.ts";
 
 register(new URL("./path-alias-loader.mjs", import.meta.url));
 
@@ -307,6 +312,22 @@ test("accompaniment retry boundaries advance once per half beat", () => {
   assert.equal(transportSubdivisionAtBeat(4.5), 9);
   assert.equal(transportSubdivisionAtBeat(-3), 0);
   assert.equal(transportSubdivisionAtBeat(Number.NaN), 0);
+});
+
+test("compound meter uses dotted pulses on the quarter-note transport", () => {
+  assert.deepEqual(meterGrid([6, 8]), {
+    measureBeats: 3,
+    pulseBeats: 1.5,
+    pulsesPerMeasure: 2,
+    beatUnitBeats: 0.5,
+    compound: true,
+  });
+  assert.equal(pulseIndexAtBeat(1.49, [6, 8]), 0);
+  assert.equal(pulseIndexAtBeat(1.5, [6, 8]), 1);
+  assert.equal(pulseIndexAtBeat(3, [6, 8]), 2);
+  assert.equal(isDownbeatPulse(0, [6, 8]), true);
+  assert.equal(isDownbeatPulse(1, [6, 8]), false);
+  assert.equal(isDownbeatPulse(2, [6, 8]), true);
 });
 
 test("POWER MODE preserves the normal mix and clamps unsafe energy", () => {

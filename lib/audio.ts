@@ -15,6 +15,7 @@ import {
   type PowerModeProfile,
 } from "@/lib/audioPower";
 import { scheduleAudioSourceWindow } from "@/lib/audioScheduling";
+import { meterGrid } from "@/lib/meter";
 import type { Song } from "@/lib/songs";
 
 export type SynthWaveform = "piano" | "electric" | "organ";
@@ -28,11 +29,12 @@ export type PerformanceCue =
   | "stamp-neutral";
 
 export interface AccompanimentStep {
-  /** Zero-based quarter-note beat within the current measure. */
-  beatInMeasure: number;
-  /** Eighth-note subdivision: zero is on the beat, one is the offbeat. */
-  subdivision: 0 | 1;
-  beatsPerMeasure: number;
+  /** Zero-based musical pulse within the current measure. */
+  pulseInMeasure: number;
+  /** Zero-based eighth-note scheduler step within the current pulse. */
+  subdivisionInPulse: number;
+  subdivisionsPerPulse: number;
+  pulsesPerMeasure: number;
   beatDurationSeconds: number;
   /** Tonic in the bass register (C2 is MIDI 36). */
   tonicMidi: number;
@@ -407,10 +409,18 @@ export class KeyboardSynth {
       4,
       Math.max(0.08, step.beatDurationSeconds),
     );
-    const beatsPerMeasure = Math.max(1, Math.floor(step.beatsPerMeasure));
-    const beatInMeasure =
-      ((Math.floor(step.beatInMeasure) % beatsPerMeasure) + beatsPerMeasure) %
-      beatsPerMeasure;
+    const pulsesPerMeasure = Math.max(1, Math.floor(step.pulsesPerMeasure));
+    const pulseInMeasure =
+      ((Math.floor(step.pulseInMeasure) % pulsesPerMeasure) + pulsesPerMeasure) %
+      pulsesPerMeasure;
+    const subdivisionsPerPulse = Math.max(
+      1,
+      Math.floor(step.subdivisionsPerPulse),
+    );
+    const subdivisionInPulse =
+      ((Math.floor(step.subdivisionInPulse) % subdivisionsPerPulse) +
+        subdivisionsPerPulse) %
+      subdivisionsPerPulse;
 
     // Closed hi-hat: the constant subdivision makes the groove legible at
     // every practice speed without relying on sample assets.
@@ -418,12 +428,12 @@ export class KeyboardSynth {
       const source = context.createBufferSource();
       const filter = context.createBiquadFilter();
       const gain = context.createGain();
-      const duration = step.subdivision === 0 ? 0.042 : 0.028;
+      const duration = subdivisionInPulse === 0 ? 0.042 : 0.028;
       source.buffer = this.getNoiseBuffer(context);
       filter.type = "highpass";
       filter.frequency.value = 5_800 + intensity * 1_800;
       gain.gain.setValueAtTime(
-        (step.subdivision === 0 ? 0.028 : 0.018) + intensity * 0.018,
+        (subdivisionInPulse === 0 ? 0.028 : 0.018) + intensity * 0.018,
         now,
       );
       gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
@@ -437,7 +447,7 @@ export class KeyboardSynth {
 
     // A short filtered cymbal bloom marks the downbeat in POWER without
     // turning the practice groove into a wall of noise.
-    if (power > 0.015 && step.subdivision === 0 && beatInMeasure === 0) {
+    if (power > 0.015 && subdivisionInPulse === 0 && pulseInMeasure === 0) {
       const source = context.createBufferSource();
       const filter = context.createBiquadFilter();
       const gain = context.createGain();
@@ -460,13 +470,13 @@ export class KeyboardSynth {
       source.stop(now + duration + 0.01);
     }
 
-    if (step.subdivision === 0) {
+    if (subdivisionInPulse === 0) {
       const backbeat =
-        (beatsPerMeasure >= 4 && beatInMeasure % 2 === 1) ||
-        (beatsPerMeasure < 4 && beatInMeasure === 1);
+        (pulsesPerMeasure >= 4 && pulseInMeasure % 2 === 1) ||
+        (pulsesPerMeasure < 4 && pulseInMeasure === 1);
       const kick =
-        beatInMeasure === 0 ||
-        (intensity >= 0.52 && beatInMeasure % 2 === 0);
+        pulseInMeasure === 0 ||
+        (intensity >= 0.52 && pulseInMeasure % 2 === 0);
 
       if (kick) {
         const oscillator = context.createOscillator();
@@ -504,7 +514,7 @@ export class KeyboardSynth {
       // Alternating tonic/fifth bass keeps the backing useful across the
       // curriculum without pretending to infer a full chord chart.
       {
-        const bassMidi = step.tonicMidi + (beatInMeasure % 2 === 0 ? 0 : 7);
+        const bassMidi = step.tonicMidi + (pulseInMeasure % 2 === 0 ? 0 : 7);
         const oscillator = context.createOscillator();
         const filter = context.createBiquadFilter();
         const gain = context.createGain();
@@ -533,8 +543,8 @@ export class KeyboardSynth {
     // only once per measure, keeping the eighth-note scheduler inexpensive.
     if (
       power > 0.62 &&
-      step.subdivision === 1 &&
-      beatInMeasure === beatsPerMeasure - 1
+      subdivisionInPulse === subdivisionsPerPulse - 1 &&
+      pulseInMeasure === pulsesPerMeasure - 1
     ) {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
@@ -551,9 +561,11 @@ export class KeyboardSynth {
     }
 
     const rhythmHit =
-      (step.subdivision === 1 && intensity >= 0.18) ||
-      (step.subdivision === 0 &&
-        beatInMeasure === 0 &&
+      (subdivisionInPulse === subdivisionsPerPulse - 1 &&
+        subdivisionInPulse > 0 &&
+        intensity >= 0.18) ||
+      (subdivisionInPulse === 0 &&
+        pulseInMeasure === 0 &&
         (intensity < 0.18 || power > 0.16));
     if (rhythmHit) {
       const gain = context.createGain();
@@ -626,16 +638,21 @@ export class KeyboardSynth {
 
     const tempoScale = Math.min(2, Math.max(0.1, options.tempoScale ?? 1));
     const beatDurationSeconds = 60 / (options.song.bpm * tempoScale);
-    const measureBeats = Math.max(
-      1,
-      options.song.timeSignature[0] * (4 / options.song.timeSignature[1]),
+    const meter = meterGrid(options.song.timeSignature);
+    const subdivisionsPerPulse = Math.max(1, Math.round(meter.pulseBeats * 2));
+    const subdivisionsPerMeasure = Math.max(1, Math.round(meter.measureBeats * 2));
+    const subdivisionInMeasure =
+      ((stepIndex % subdivisionsPerMeasure) + subdivisionsPerMeasure) %
+      subdivisionsPerMeasure;
+    const pulseInMeasure = Math.floor(
+      subdivisionInMeasure / subdivisionsPerPulse,
     );
-    const beatInMeasure = Math.floor(beat % measureBeats);
     const harmony = deriveHarmonyAtBeat(options.song, beat);
     const played = this.playAccompanimentStep({
-      beatInMeasure,
-      subdivision: stepIndex % 2 === 0 ? 0 : 1,
-      beatsPerMeasure: measureBeats,
+      pulseInMeasure,
+      subdivisionInPulse: subdivisionInMeasure % subdivisionsPerPulse,
+      subdivisionsPerPulse,
+      pulsesPerMeasure: meter.pulsesPerMeasure,
       beatDurationSeconds,
       tonicMidi: harmony.bassMidi,
       intensity: Math.min(1, Math.max(0, options.intensity ?? 0.62)),

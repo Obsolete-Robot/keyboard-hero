@@ -1,4 +1,5 @@
 import type { Song } from "@/lib/songs";
+import { meterGrid } from "@/lib/meter";
 
 const TICKS_PER_BEAT = 12;
 const EPSILON = 0.000_001;
@@ -58,8 +59,7 @@ const eventId = (
 export function beatsPerMeasure(
   timeSignature: readonly [beatsPerMeasure: number, beatUnit: number],
 ): number {
-  const [beats, unit] = timeSignature;
-  return Math.max(1, beats * (4 / Math.max(1, unit)));
+  return meterGrid(timeSignature).measureBeats;
 }
 
 function keyPitchClass(key: string): number {
@@ -234,8 +234,9 @@ export function generateAccompanimentEvents(
   const includeDrums = options.drums ?? true;
   const includeBass = options.bass ?? true;
   const includeHarmony = options.harmony ?? true;
-  const measureBeats = beatsPerMeasure(song.timeSignature);
-  const isTriple = Math.abs(measureBeats - 3) < EPSILON;
+  const meter = meterGrid(song.timeSignature);
+  const measureBeats = meter.measureBeats;
+  const isTriple = !meter.compound && meter.pulsesPerMeasure === 3;
   const style = song.style.toLowerCase();
   const isSwing = /blues|new orleans/.test(style);
   const isRock = /rock|arena/.test(style);
@@ -250,7 +251,9 @@ export function generateAccompanimentEvents(
     const measureEnd = Math.min(song.durationBeats, measureStart + measureBeats);
 
     if (includeDrums) {
-      const kickOffsets = isTriple
+      const kickOffsets = meter.compound
+        ? [0]
+        : isTriple
         ? [0]
         : isCinematic && !isRock
           ? [0, 2]
@@ -267,19 +270,36 @@ export function generateAccompanimentEvents(
         });
       }
 
-      const snareOffsets = isTriple ? [1, 2] : isCinematic && !isMarch ? [2] : [1, 3];
+      const snareOffsets = meter.compound
+        ? [meter.pulseBeats]
+        : isTriple
+          ? [meter.pulseBeats, meter.pulseBeats * 2]
+          : isCinematic && !isMarch
+            ? [2]
+            : [1, 3];
       for (const [index, offset] of snareOffsets.entries()) {
         if (offset >= measureBeats) continue;
         addEvent(events, song, startBeat, endBeat, {
           kind: "snare",
           beat: measureStart + offset,
           durationBeats: 0.2,
-          velocity: intensity * (isTriple ? (index === 0 ? 0.58 : 0.5) : 0.82),
+          velocity:
+            intensity *
+            (meter.compound
+              ? 0.68
+              : isTriple
+                ? (index === 0 ? 0.58 : 0.5)
+                : 0.82),
         });
       }
 
-      const hatStep = song.difficulty >= 4 && (isRock || isCinematic) ? 0.25 :
-        song.difficulty >= 2 || isMarch ? 0.5 : 1;
+      const hatStep = meter.compound
+        ? meter.beatUnitBeats
+        : song.difficulty >= 4 && (isRock || isCinematic)
+          ? 0.25
+          : song.difficulty >= 2 || isMarch
+            ? 0.5
+            : Math.min(1, meter.pulseBeats);
       for (let offset = 0; offset < measureBeats - EPSILON; offset += hatStep) {
         const swungOffset =
           isSwing && hatStep === 0.5 && Math.round(offset * 2) % 2 === 1
@@ -303,7 +323,9 @@ export function generateAccompanimentEvents(
 
     if (includeBass) {
       const voicing = deriveHarmonyAtBeat(song, measureStart + 0.01);
-      const bassOffsets = isTriple
+      const bassOffsets = meter.compound
+        ? [0, meter.pulseBeats]
+        : isTriple
         ? [0]
         : song.difficulty <= 1
           ? [0, 2]
@@ -318,7 +340,13 @@ export function generateAccompanimentEvents(
         addEvent(events, song, startBeat, endBeat, {
           kind: "bass",
           beat: measureStart + offset,
-          durationBeats: isTriple ? 0.82 : song.difficulty >= 4 ? 0.58 : 0.78,
+          durationBeats: meter.compound
+            ? meter.pulseBeats * 0.62
+            : isTriple
+              ? meter.pulseBeats * 0.82
+              : song.difficulty >= 4
+                ? 0.58
+                : 0.78,
           velocity: intensity * (index === 0 ? 0.74 : 0.61),
           midi: index === 0 ? voicing.bassMidi : midi,
         });
@@ -326,7 +354,9 @@ export function generateAccompanimentEvents(
     }
 
     if (includeHarmony) {
-      const harmonyOffsets = isTriple
+      const harmonyOffsets = meter.compound
+        ? [0, meter.pulseBeats]
+        : isTriple
         ? [1, 2]
         : isRock && song.difficulty >= 4
           ? [0, 1.5, 2, 3.5]
@@ -338,8 +368,10 @@ export function generateAccompanimentEvents(
         const voicing = deriveHarmonyAtBeat(song, measureStart + offset + 0.01);
         const nextOffset = harmonyOffsets[index + 1] ?? measureBeats;
         const available = Math.max(0.25, nextOffset - offset);
-        const duration = isTriple
-          ? 0.62
+        const duration = meter.compound
+          ? meter.pulseBeats * 0.72
+          : isTriple
+          ? meter.pulseBeats * 0.62
           : isRock && song.difficulty >= 4
             ? 0.42
             : available * 0.9;
@@ -347,7 +379,9 @@ export function generateAccompanimentEvents(
           kind: "harmony",
           beat: measureStart + offset,
           durationBeats: Math.min(duration, measureEnd - (measureStart + offset)),
-          velocity: intensity * (isTriple ? 0.44 : isCinematic ? 0.48 : 0.4),
+          velocity:
+            intensity *
+            (meter.compound || isTriple ? 0.44 : isCinematic ? 0.48 : 0.4),
           pitches: voicing.pitches,
         });
       }

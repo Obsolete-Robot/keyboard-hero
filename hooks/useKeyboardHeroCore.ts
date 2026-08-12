@@ -25,6 +25,7 @@ import {
   isMIDITransportControlPortName,
   type MIDITransportAction,
 } from "@/lib/midiTransport";
+import { isDownbeatPulse, pulseIndexAtBeat } from "@/lib/meter";
 import {
   applyPowerJudgement,
   authoredChordGroupId,
@@ -669,7 +670,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   );
   const playerNoteIdBySourceRef = useRef<Map<string, string>>(new Map());
   const listenVoicesRef = useRef<Set<string>>(new Set());
-  const lastMetronomeBeatRef = useRef<number | null>(null);
+  const lastMetronomePulseRef = useRef<number | null>(null);
   const feedbackSequenceRef = useRef(0);
   const midiTransportSequenceRef = useRef(0);
   const lastMIDITransportPressRef = useRef<{
@@ -1029,10 +1030,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         }
 
         backingBandFailedStepRef.current = null;
-        const beatFloor = Math.floor(normalizedBeat);
+        const pulseIndex = pulseIndexAtBeat(normalizedBeat, song.timeSignature);
         const subdivisionPhase = normalizedBeat * 2 - stepIndex;
         const pulse = (1 - subdivisionPhase) ** 3;
-        const downbeat = beatFloor % song.timeSignature[0] === 0;
+        const downbeat = isDownbeatPulse(pulseIndex, song.timeSignature);
         const energy = Math.sqrt(currentSettings.backingBandMix) *
           (0.28 + currentSettings.backingBandIntensity * 0.62) *
           (0.55 + pulse * 0.45) *
@@ -1098,7 +1099,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       finishPower();
       setSongComplete(true);
     }
-    lastMetronomeBeatRef.current = null;
+    lastMetronomePulseRef.current = null;
     stopListenVoices();
     stopBackingBand(true);
   }, [
@@ -1209,7 +1210,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       countInEndTimeRef.current = 0;
       preRollVisualBeatRef.current = destination;
       setCountdown(null);
-      lastMetronomeBeatRef.current = null;
+      lastMetronomePulseRef.current = null;
       if (movedToNewBeat) resetScore();
       commitPosition(destination);
     },
@@ -2634,14 +2635,23 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
             ? -remainingSeconds * countInBeatRateRef.current
             : 0;
         const previousVisualBeat = preRollVisualBeatRef.current;
-        const crossedBeat = Math.floor(nextVisualBeat + 0.000_001);
+        const crossedPulse = pulseIndexAtBeat(
+          nextVisualBeat,
+          song.timeSignature,
+        );
+        const previousPulse = pulseIndexAtBeat(
+          previousVisualBeat,
+          song.timeSignature,
+        );
         if (
           currentSettings.metronomeEnabled &&
-          crossedBeat <= 0 &&
-          crossedBeat > Math.floor(previousVisualBeat + 0.000_001)
+          crossedPulse <= 0 &&
+          crossedPulse > previousPulse
         ) {
-          playMetronomeSafely(crossedBeat % song.timeSignature[0] === 0);
-          if (crossedBeat === 0) lastMetronomeBeatRef.current = 0;
+          playMetronomeSafely(
+            isDownbeatPulse(crossedPulse, song.timeSignature),
+          );
+          if (crossedPulse === 0) lastMetronomePulseRef.current = 0;
         }
         preRollVisualBeatRef.current = nextVisualBeat;
         setVisualBeat(nextVisualBeat);
@@ -2730,13 +2740,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         stopListenVoices();
       }
 
-      const beatNumber = Math.floor(nextBeat + 0.0001);
+      const pulseIndex = pulseIndexAtBeat(nextBeat, song.timeSignature);
       if (
         currentSettings.metronomeEnabled &&
-        beatNumber !== lastMetronomeBeatRef.current
+        pulseIndex !== lastMetronomePulseRef.current
       ) {
-        lastMetronomeBeatRef.current = beatNumber;
-        playMetronomeSafely(beatNumber % song.timeSignature[0] === 0);
+        lastMetronomePulseRef.current = pulseIndex;
+        playMetronomeSafely(
+          isDownbeatPulse(pulseIndex, song.timeSignature),
+        );
       }
 
       if (nextBeat >= loopEnd) {
@@ -2755,7 +2767,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
               resetAttemptForLoop();
             }
           }
-          lastMetronomeBeatRef.current = null;
+          lastMetronomePulseRef.current = null;
         } else {
           resolvePlayerNoteAttemptsThrough(
             song.durationBeats,

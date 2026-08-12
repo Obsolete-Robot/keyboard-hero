@@ -19,6 +19,7 @@ import {
   type SongNote,
   type SongSection,
 } from "@/lib/songs";
+import { meterGrid } from "@/lib/meter";
 
 export const CHALLENGE_LEVELS = ["easy", "medium", "hard"] as const;
 
@@ -102,7 +103,7 @@ const repeatArrangement = (
   ).flat();
 
 const beatsPerMeasure = (signature: readonly [number, number]): number =>
-  signature[0] * (4 / signature[1]);
+  meterGrid(signature).measureBeats;
 
 const careerTierFor = (courseRank: number): CareerTier =>
   CAREER_TIERS[Math.min(CAREER_TIERS.length - 1, Math.floor((courseRank - 1) / 7))];
@@ -533,9 +534,10 @@ const addHardHarmony = (
   progression: readonly HarmonySymbol[],
 ): NoteSeed[] => {
   const result = [...melody];
-  const measureBeats = beatsPerMeasure(signature);
+  const meter = meterGrid(signature);
+  const measureBeats = meter.measureBeats;
   const measureCount = Math.ceil(durationBeats / measureBeats);
-  const isTriple = signature[0] === 3 || signature[0] === 6;
+  const isTriple = !meter.compound && meter.pulsesPerMeasure === 3;
 
   for (let measure = 0; measure < measureCount; measure += 1) {
     const start = measure * measureBeats;
@@ -548,8 +550,10 @@ const addHardHarmony = (
     result.push(seed(root, start, Math.min(0.88, measureBeats * 0.42), "left", 80, "normal", true));
     result.push(seed(fifth, start + measureBeats / 2, Math.min(0.72, measureBeats * 0.32), "left", 74));
 
-    const chordAttacks = isTriple
-      ? [Math.min(1, measureBeats / 3), Math.min(2, (measureBeats * 2) / 3)]
+    const chordAttacks = meter.compound
+      ? [0, meter.pulseBeats]
+      : isTriple
+      ? [meter.pulseBeats, meter.pulseBeats * 2]
       : [0, measureBeats / 2];
     for (const offset of chordAttacks) {
       const attack = start + offset;
@@ -560,7 +564,14 @@ const addHardHarmony = (
           seed(
             midi,
             attack,
-            Math.min(isTriple ? 0.68 : 1.18, remaining),
+            Math.min(
+              meter.compound
+                ? meter.pulseBeats * 0.72
+                : isTriple
+                  ? meter.pulseBeats * 0.68
+                  : 1.18,
+              remaining,
+            ),
             "right",
             offset === 0 ? 88 : 82,
             "normal",
