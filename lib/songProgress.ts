@@ -2,9 +2,26 @@ import type { ChallengeLevel } from "@/lib/songCatalog";
 
 export const SONG_PROGRESS_STORAGE_KEY = "keyboard-hero.song-progress.v1";
 
+export const SONG_RANKS = [
+  "F",
+  "D",
+  "C−",
+  "C",
+  "C+",
+  "B−",
+  "B",
+  "B+",
+  "A−",
+  "A",
+  "A+",
+] as const;
+
+export type SongRank = (typeof SONG_RANKS)[number];
+
 export interface SongProgressEntry {
   completedRuns: number;
   bestScore: number;
+  bestRank?: SongRank;
 }
 
 export interface SongProgressState {
@@ -30,6 +47,23 @@ function normalizedInteger(value: unknown): number | null {
   return Number.isFinite(number) && number >= 0 ? Math.floor(number) : null;
 }
 
+function normalizedRank(value: unknown): SongRank | undefined {
+  if (typeof value !== "string") return undefined;
+  const candidate = value.replace("-", "−");
+  return SONG_RANKS.find((rank) => rank === candidate);
+}
+
+function higherRank(
+  current: SongRank | undefined,
+  candidate: SongRank | undefined,
+): SongRank | undefined {
+  if (!candidate) return current;
+  if (!current) return candidate;
+  return SONG_RANKS.indexOf(candidate) > SONG_RANKS.indexOf(current)
+    ? candidate
+    : current;
+}
+
 export function parseSongProgress(raw: string | null): SongProgressState {
   if (!raw) return createSongProgress();
 
@@ -48,6 +82,7 @@ export function parseSongProgress(raw: string | null): SongProgressState {
         if (!isRecord(storedEntry)) continue;
         const completedRuns = normalizedInteger(storedEntry.completedRuns);
         const bestScore = normalizedInteger(storedEntry.bestScore);
+        const bestRank = normalizedRank(storedEntry.bestRank);
         if (completedRuns === null || completedRuns < 1 || bestScore === null) {
           continue;
         }
@@ -55,6 +90,7 @@ export function parseSongProgress(raw: string | null): SongProgressState {
         progress.songs[familyId][challenge] = {
           completedRuns,
           bestScore,
+          ...(bestRank ? { bestRank } : {}),
         };
       }
     }
@@ -77,9 +113,11 @@ export function recordSongCompletion(
   familyId: string,
   challenge: ChallengeLevel,
   score: number,
+  rank?: string,
 ): SongProgressState {
   const existing = getSongProgress(progress, familyId, challenge);
   const normalizedScore = normalizedInteger(score) ?? 0;
+  const bestRank = higherRank(existing?.bestRank, normalizedRank(rank));
 
   return {
     version: 1,
@@ -90,6 +128,7 @@ export function recordSongCompletion(
         [challenge]: {
           completedRuns: (existing?.completedRuns ?? 0) + 1,
           bestScore: Math.max(existing?.bestScore ?? 0, normalizedScore),
+          ...(bestRank ? { bestRank } : {}),
         },
       },
     },

@@ -3417,14 +3417,14 @@ kbd {
 
 .song-card-progress {
   position: relative;
-  min-height: 76px;
+  min-height: 104px;
   margin-top: 15px;
-  padding: 11px 13px 10px;
+  padding: 12px 14px 11px;
   border: 1px solid rgba(243, 239, 227, 0.18);
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  gap: 18px;
   overflow: hidden;
   color: rgba(243, 239, 227, 0.46);
   background:
@@ -3442,6 +3442,8 @@ kbd {
   background: rgba(243, 239, 227, 0.2);
 }
 
+.song-card-progress-rank,
+.song-card-progress-details,
 .song-card-progress-status,
 .song-card-progress-score {
   min-width: 0;
@@ -3449,6 +3451,27 @@ kbd {
   gap: 4px;
 }
 
+.song-card-progress-rank {
+  min-width: 76px;
+  align-self: stretch;
+  align-content: center;
+  padding-right: 14px;
+  border-right: 1px solid rgba(243, 239, 227, 0.16);
+}
+
+.song-card-progress-rank > strong {
+  color: rgba(243, 239, 227, 0.58);
+  font: 400 clamp(54px, 5vw, 76px)/0.66 var(--font-display);
+  letter-spacing: -0.025em;
+}
+
+.song-card-progress-details {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 16px;
+}
+
+.song-card-progress-rank > small,
 .song-card-progress-status > small,
 .song-card-progress-score > small {
   color: inherit;
@@ -3496,12 +3519,17 @@ kbd {
 }
 
 .song-card-progress.is-cleared .song-card-progress-status > b,
+.song-card-progress.is-cleared .song-card-progress-rank > strong,
 .song-card-progress.is-cleared .song-card-progress-score > strong {
   color: #09090c;
 }
 
+.song-card-progress.is-cleared .song-card-progress-rank {
+  border-right-color: rgba(9, 9, 12, 0.22);
+}
+
 .song-card-progress.is-cleared .song-card-progress-score > strong {
-  font-size: clamp(26px, 2.6vw, 38px);
+  font-size: clamp(21px, 2.1vw, 30px);
   text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.38);
 }
 

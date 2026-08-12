@@ -45,6 +45,7 @@ import {
   type SustainFeedback,
 } from "@/hooks/useKeyboardHeroCore";
 import { resolveMIDITransportIntent } from "@/lib/midiTransport";
+import { buildPerformanceReport } from "@/lib/performanceReport";
 import {
   getSongDurationSeconds,
   midiToNoteName,
@@ -517,7 +518,7 @@ function SongLibrary({
                       <button
                         aria-label={`Play ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}. ${
                           savedProgress
-                            ? `Cleared ${savedProgress.completedRuns} times. Best score ${savedProgress.bestScore}.`
+                            ? `Cleared ${savedProgress.completedRuns} times. Best rank ${savedProgress.bestRank ?? "not recorded"}. Best score ${savedProgress.bestScore}.`
                             : "Not cleared yet."
                         }`}
                         aria-pressed={family.id === activeFamilyId}
@@ -544,32 +545,45 @@ function SongLibrary({
                             savedProgress ? " is-cleared" : ""
                           }`}
                         >
-                          <span className="song-card-progress-status">
-                            <small>Stage result</small>
-                            <b>
-                              {savedProgress && (
-                                <Check size={18} aria-hidden="true" />
-                              )}
-                              {savedProgress ? "Cleared" : "Not cleared"}
-                            </b>
+                          <span className="song-card-progress-rank">
+                            <small>{savedProgress?.bestRank ? "Best rank" : "Unranked"}</small>
+                            <strong>{savedProgress?.bestRank ?? "—"}</strong>
                             <small>
-                              {savedProgress
-                                ? `${savedProgress.completedRuns} completed ${
-                                    savedProgress.completedRuns === 1
-                                      ? "run"
-                                      : "runs"
-                                  }`
-                                : "Full scored run required"}
+                              {savedProgress?.bestRank
+                                ? "Performance grade"
+                                : savedProgress
+                                  ? "Complete again to rank"
+                                  : "No grade yet"}
                             </small>
                           </span>
-                          <span className="song-card-progress-score">
-                            <small>Personal best</small>
-                            <strong>
-                              {savedProgress
-                                ? savedProgress.bestScore.toLocaleString()
-                                : "No score"}
-                            </strong>
-                            <small>{savedProgress ? "Stage points" : "Play to rank"}</small>
+                          <span className="song-card-progress-details">
+                            <span className="song-card-progress-status">
+                              <small>Stage result</small>
+                              <b>
+                                {savedProgress && (
+                                  <Check size={16} aria-hidden="true" />
+                                )}
+                                {savedProgress ? "Cleared" : "Not cleared"}
+                              </b>
+                              <small>
+                                {savedProgress
+                                  ? `${savedProgress.completedRuns} completed ${
+                                      savedProgress.completedRuns === 1
+                                        ? "run"
+                                        : "runs"
+                                    }`
+                                  : "Full scored run required"}
+                              </small>
+                            </span>
+                            <span className="song-card-progress-score">
+                              <small>Personal best</small>
+                              <strong>
+                                {savedProgress
+                                  ? savedProgress.bestScore.toLocaleString()
+                                  : "No score"}
+                              </strong>
+                              <small>{savedProgress ? "Stage points" : "Play to rank"}</small>
+                            </span>
                           </span>
                         </div>
                         <Difficulty value={chart.difficulty} />
@@ -787,18 +801,26 @@ export default function Home() {
     }
 
     recordedCompletionRef.current = song.id;
+    const performanceRank = buildPerformanceReport(
+      song,
+      hero.noteResults,
+      hero.score,
+      hero.settings.practiceMode,
+    ).grade;
     setSongProgress((current) =>
       recordSongCompletion(
         current,
         selectedSongFamily.id,
         challengeLevel,
         hero.score.points,
+        performanceRank,
       ),
     );
   }, [
     activeTrainingLesson,
     challengeLevel,
     hero.quickLoopEnabled,
+    hero.noteResults,
     hero.score.points,
     hero.settings.practiceMode,
     selectedSongFamily.id,
@@ -1506,7 +1528,10 @@ export default function Home() {
               )}
               {song.key} · {song.timeSignature[0]}/{song.timeSignature[1]}
               {!activeTrainingLesson && currentSongProgress && (
-                <> · Best {currentSongProgress.bestScore.toLocaleString()}</>
+                <>
+                  {" "}· Rank {currentSongProgress.bestRank ?? "—"} · Best{" "}
+                  {currentSongProgress.bestScore.toLocaleString()}
+                </>
               )}
             </div>
           </div>
