@@ -422,7 +422,9 @@ test("grades the score sheet from timing, completion, and extra misses", async (
     "flow",
   );
   const sustainRow = held.rows.find((row) => row.label === "Sustain bonus");
-  const streakRow = held.rows.find((row) => row.label === "Streak bonus");
+  const streakRow = held.rows.find(
+    (row) => row.label === "Streak + Power bonus",
+  );
   assert.equal(sustainRow?.points, 240);
   assert.match(sustainRow?.detail ?? "", /1 full/);
   assert.equal(streakRow?.points, 90);

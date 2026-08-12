@@ -215,8 +215,8 @@ export function buildPerformanceReport(
       tone: "bonus",
     },
     {
-      label: "Streak bonus",
-      detail: `${score.bestCombo}× peak combo`,
+      label: "Streak + Power bonus",
+      detail: `${score.bestCombo}× peak combo · includes powered notes`,
       points: streakBonus,
       tone: "bonus",
     },
