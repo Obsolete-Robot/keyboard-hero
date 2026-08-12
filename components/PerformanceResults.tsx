@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -15,15 +16,21 @@ import type {
   NoteResult,
   PracticeMode,
 } from "@/hooks/useKeyboardHeroCore";
+import type { PerformanceCue } from "@/lib/audio";
 import { buildPerformanceReport } from "@/lib/performanceReport";
 import type { Song } from "@/lib/songs";
 
 const RESULT_REVEAL = {
-  rowStart: 420,
-  rowStep: 150,
-  stagePoints: 1650,
-  testScore: 2400,
-  actionsReady: 4120,
+  rowStart: 460,
+  rowStep: 180,
+  stagePoints: 1900,
+  stagePointsDuration: 760,
+  testScore: 2800,
+  testScoreDuration: 680,
+  grade: 3680,
+  feedback: 4120,
+  actions: 4250,
+  actionsReady: 4600,
 } as const;
 
 function prefersReducedMotion() {
@@ -73,6 +80,7 @@ interface PerformanceResultsProps {
   noteResults: ReadonlyMap<string, NoteResult>;
   score: KeyboardHeroScore;
   practiceMode: PracticeMode;
+  onCue: (cue: PerformanceCue, variant?: number) => void;
   onReplay: () => void;
   onPractice: () => void;
 }
@@ -82,9 +90,13 @@ export default function PerformanceResults({
   noteResults,
   score,
   practiceMode,
+  onCue,
   onReplay,
   onPractice,
 }: PerformanceResultsProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const fitFrameRef = useRef<HTMLDivElement>(null);
+  const fitScalerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const [reduceMotion] = useState(prefersReducedMotion);
   const [revealReady, setRevealReady] = useState(reduceMotion);
@@ -92,6 +104,43 @@ export default function PerformanceResults({
     () => buildPerformanceReport(song, noteResults, score, practiceMode),
     [noteResults, practiceMode, score, song],
   );
+  const gradeOutcome =
+    report.testScore === null
+      ? "neutral"
+      : report.grade === "F"
+        ? "fail"
+        : "pass";
+
+  useEffect(() => {
+    const timers: number[] = [];
+    const queueCue = (
+      delay: number,
+      cue: PerformanceCue,
+      variant = 0,
+    ) => {
+      timers.push(
+        window.setTimeout(() => onCue(cue, variant), Math.max(0, delay)),
+      );
+    };
+    const stampCue: PerformanceCue = `stamp-${gradeOutcome}`;
+
+    if (reduceMotion) {
+      queueCue(0, stampCue);
+    } else {
+      report.rows.forEach((_, index) => {
+        queueCue(
+          RESULT_REVEAL.rowStart + index * RESULT_REVEAL.rowStep,
+          "ledger-row",
+          index,
+        );
+      });
+      queueCue(RESULT_REVEAL.stagePoints, "stage-count");
+      queueCue(RESULT_REVEAL.testScore, "test-score");
+      queueCue(RESULT_REVEAL.grade, stampCue);
+    }
+
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [gradeOutcome, onCue, reduceMotion, report.rows]);
 
   useEffect(() => {
     const activeElement = document.activeElement;
@@ -117,6 +166,76 @@ export default function PerformanceResults({
       }
     };
   }, [reduceMotion]);
+
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current;
+    const fitFrame = fitFrameRef.current;
+    const fitScaler = fitScalerRef.current;
+    const dialog = dialogRef.current;
+    if (!overlay || !fitFrame || !fitScaler || !dialog) return;
+
+    let resizeFrame = 0;
+
+    const resetFit = () => {
+      fitFrame.style.removeProperty("width");
+      fitFrame.style.removeProperty("height");
+      fitScaler.style.removeProperty("width");
+      fitScaler.style.removeProperty("--results-fit-scale");
+    };
+
+    const fitResultsSheet = () => {
+      if (window.matchMedia("(max-width: 640px)").matches) {
+        resetFit();
+        return;
+      }
+
+      const overlayStyle = window.getComputedStyle(overlay);
+      const horizontalPadding =
+        Number.parseFloat(overlayStyle.paddingLeft) +
+        Number.parseFloat(overlayStyle.paddingRight);
+      const verticalPadding =
+        Number.parseFloat(overlayStyle.paddingTop) +
+        Number.parseFloat(overlayStyle.paddingBottom);
+      const availableWidth = Math.max(1, overlay.clientWidth - horizontalPadding);
+      const availableHeight = Math.max(1, overlay.clientHeight - verticalPadding);
+      const naturalWidth = Math.min(880, availableWidth);
+
+      fitFrame.style.width = `${naturalWidth}px`;
+      fitFrame.style.height = "auto";
+      fitScaler.style.width = `${naturalWidth}px`;
+      fitScaler.style.setProperty("--results-fit-scale", "1");
+
+      const naturalHeight = dialog.offsetHeight;
+      const fitScale = Math.min(
+        1,
+        availableWidth / naturalWidth,
+        availableHeight / naturalHeight,
+      );
+
+      fitFrame.style.width = `${naturalWidth * fitScale}px`;
+      fitFrame.style.height = `${naturalHeight * fitScale}px`;
+      fitScaler.style.setProperty("--results-fit-scale", fitScale.toString());
+    };
+
+    const scheduleFit = () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(fitResultsSheet);
+    };
+
+    fitResultsSheet();
+    const resizeObserver = new ResizeObserver(scheduleFit);
+    resizeObserver.observe(overlay);
+    resizeObserver.observe(dialog);
+    window.visualViewport?.addEventListener("resize", scheduleFit);
+    void document.fonts?.ready.then(scheduleFit);
+
+    return () => {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeObserver.disconnect();
+      window.visualViewport?.removeEventListener("resize", scheduleFit);
+      resetFit();
+    };
+  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -163,16 +282,27 @@ export default function PerformanceResults({
     report.testScore === null ? "Demo run, not graded" : `${report.testScore} out of 100`;
 
   const resultSheet = (
-    <div className="performance-results-overlay">
-      <section
-        aria-describedby="performance-results-message"
-        aria-labelledby="performance-results-title"
-        aria-modal="true"
-        className={`performance-results-card result-${report.tone}`}
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
-      >
+    <div className="performance-results-overlay" ref={overlayRef}>
+      <div className="results-fit-frame" ref={fitFrameRef}>
+        <div className="results-fit-scaler" ref={fitScalerRef}>
+          <section
+            aria-describedby="performance-results-message"
+            aria-labelledby="performance-results-title"
+            aria-modal="true"
+            className={`performance-results-card result-${report.tone}`}
+            ref={dialogRef}
+            role="dialog"
+            style={{
+              "--stage-settle-delay": `${
+                RESULT_REVEAL.stagePoints + RESULT_REVEAL.stagePointsDuration - 130
+              }ms`,
+              "--test-block-delay": `${RESULT_REVEAL.testScore - 140}ms`,
+              "--grade-delay": `${RESULT_REVEAL.grade}ms`,
+              "--feedback-delay": `${RESULT_REVEAL.feedback}ms`,
+              "--actions-delay": `${RESULT_REVEAL.actions}ms`,
+            } as CSSProperties}
+            tabIndex={-1}
+          >
         <div className="results-registration" aria-hidden="true" />
 
         <header className="results-sheet-header">
@@ -191,7 +321,7 @@ export default function PerformanceResults({
               <AnimatedNumber
                 value={score.points}
                 delay={RESULT_REVEAL.stagePoints}
-                duration={700}
+                duration={RESULT_REVEAL.stagePointsDuration}
               />
             </strong>
           </div>
@@ -249,7 +379,7 @@ export default function PerformanceResults({
                     <AnimatedNumber
                       value={report.testScore}
                       delay={RESULT_REVEAL.testScore}
-                      duration={650}
+                      duration={RESULT_REVEAL.testScoreDuration}
                     />
                   </strong>
                   <small aria-hidden="true">/100</small>
@@ -264,11 +394,20 @@ export default function PerformanceResults({
 
           <div className="results-grade-zone">
             <span className="results-grade-burst" aria-hidden="true" />
-            <div className="results-grade-stamp" aria-label={`Final grade ${report.gradeLabel}`}>
+            <div
+              className={`results-grade-stamp stamp-${gradeOutcome}`}
+              aria-label={`Final grade ${report.gradeLabel}`}
+            >
               <span aria-hidden="true">Final grade</span>
               <strong aria-hidden="true">{report.grade}</strong>
               <em aria-hidden="true">
-                {report.grade === "A+" ? "Headliner" : "Set complete"}
+                {report.grade === "A+"
+                  ? "Headliner"
+                  : gradeOutcome === "fail"
+                    ? "Try again"
+                    : gradeOutcome === "neutral"
+                      ? "Practice run"
+                      : "Set complete"}
               </em>
             </div>
           </div>
@@ -307,7 +446,9 @@ export default function PerformanceResults({
             ? ` ${report.missedOrUnplayed} notes were missed or unplayed.`
             : " Every note was completed."}
         </p>
-      </section>
+          </section>
+        </div>
+      </div>
     </div>
   );
 

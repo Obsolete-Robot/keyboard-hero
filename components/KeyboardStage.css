@@ -632,6 +632,7 @@
   .kh-stage__finger-guide-legend {
     display: none;
   }
+
 }
 
 @container (max-width: 440px) {
@@ -670,6 +671,7 @@
   .kh-stage__finger small {
     display: none;
   }
+
 }
 
 @media (prefers-reduced-motion: reduce) {

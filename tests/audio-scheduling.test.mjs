@@ -211,6 +211,49 @@ test("metronome one-shots disconnect their complete node chain on ended", async 
   }
 });
 
+test("results cues distinguish line reveals, passing stamps, and failing stamps", async () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  FakeAudioContext.instances = [];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { AudioContext: FakeAudioContext },
+    writable: true,
+  });
+
+  const synth = new KeyboardSynth();
+  try {
+    assert.equal(
+      synth.playPerformanceCue("ledger-row"),
+      false,
+      "a results cue never creates a locked AudioContext after playback",
+    );
+    await synth.resume();
+    const context = FakeAudioContext.instances.at(-1);
+
+    const beforeRow = context.oscillators.length;
+    assert.equal(synth.playPerformanceCue("ledger-row", 3), true);
+    assert.equal(context.oscillators.length - beforeRow, 1);
+
+    const beforePass = context.oscillators.length;
+    synth.playPerformanceCue("stamp-pass");
+    const passOscillators = context.oscillators.length - beforePass;
+
+    const beforeFail = context.oscillators.length;
+    synth.playPerformanceCue("stamp-fail");
+    const failOscillators = context.oscillators.length - beforeFail;
+
+    assert.equal(passOscillators, 5, "the passing stamp lands with a bright chord");
+    assert.equal(failOscillators, 3, "the failing stamp uses a shorter descending buzzer");
+  } finally {
+    await synth.dispose();
+    if (originalWindow) {
+      Object.defineProperty(globalThis, "window", originalWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
+    }
+  }
+});
+
 test("voice scheduling exceptions cannot abort transport reconciliation", () => {
   const notes = [{ id: "note-1", startBeat: 1, durationBeats: 1 }];
   const activeIds = new Set();

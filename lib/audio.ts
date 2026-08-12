@@ -19,6 +19,14 @@ import type { Song } from "@/lib/songs";
 
 export type SynthWaveform = "piano" | "electric" | "organ";
 
+export type PerformanceCue =
+  | "ledger-row"
+  | "stage-count"
+  | "test-score"
+  | "stamp-pass"
+  | "stamp-fail"
+  | "stamp-neutral";
+
 export interface AccompanimentStep {
   /** Zero-based quarter-note beat within the current measure. */
   beatInMeasure: number;
@@ -333,6 +341,21 @@ export class KeyboardSynth {
           node.disconnect();
         } catch {
           // The graph may already have been disconnected during teardown.
+        }
+      }
+    };
+  }
+
+  private trackOneShotSource(
+    source: AudioScheduledSourceNode,
+    nodes: readonly AudioNode[] = [],
+  ): void {
+    source.onended = () => {
+      for (const node of [source, ...nodes]) {
+        try {
+          node.disconnect();
+        } catch {
+          // A short result cue may already be detached during app teardown.
         }
       }
     };
@@ -983,6 +1006,134 @@ export class KeyboardSynth {
     };
     oscillator.start(now);
     oscillator.stop(now + 0.065);
+  }
+
+  /**
+   * Plays the paper ticks, score ratchets, and final stamp used by the results
+   * sheet. The game unlocks this AudioContext when playback starts, so these
+   * delayed cues remain reliable without trying to open a second context.
+   */
+  playPerformanceCue(cue: PerformanceCue, variant = 0): boolean {
+    const context = this.context;
+    const destination = this.master;
+    if (!context || !destination || context.state !== "running") return false;
+
+    const now = context.currentTime + 0.004;
+    const scheduleTone = (
+      frequency: number,
+      delay: number,
+      duration: number,
+      level: number,
+      type: OscillatorType = "sine",
+      endFrequency = frequency,
+    ) => {
+      const startsAt = now + Math.max(0, delay);
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(frequency, startsAt);
+      if (endFrequency !== frequency) {
+        oscillator.frequency.exponentialRampToValueAtTime(
+          Math.max(20, endFrequency),
+          startsAt + duration,
+        );
+      }
+      gain.gain.setValueAtTime(0.0001, startsAt);
+      gain.gain.exponentialRampToValueAtTime(
+        Math.max(0.0001, level),
+        startsAt + Math.min(0.009, duration * 0.18),
+      );
+      gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + duration);
+      oscillator.connect(gain);
+      gain.connect(destination);
+      this.trackOneShotSource(oscillator, [gain]);
+      scheduleAudioSourceWindow(oscillator, startsAt, startsAt + duration + 0.012);
+    };
+    const schedulePaperImpact = (
+      delay: number,
+      duration: number,
+      level: number,
+      frequency: number,
+    ) => {
+      const startsAt = now + Math.max(0, delay);
+      const source = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      const gain = context.createGain();
+      source.buffer = this.getNoiseBuffer(context);
+      filter.type = "bandpass";
+      filter.frequency.value = frequency;
+      filter.Q.value = 0.72;
+      gain.gain.setValueAtTime(Math.max(0.0001, level), startsAt);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + duration);
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(destination);
+      this.trackOneShotSource(source, [filter, gain]);
+      scheduleAudioSourceWindow(source, startsAt, startsAt + duration + 0.01);
+    };
+
+    if (cue === "ledger-row") {
+      const row = Math.max(0, Math.min(5, Math.floor(variant)));
+      schedulePaperImpact(0, 0.038, 0.026, 2_150 + row * 190);
+      scheduleTone(680 + row * 46, 0, 0.052, 0.018, "square");
+      return true;
+    }
+
+    if (cue === "stage-count" || cue === "test-score") {
+      const isTestScore = cue === "test-score";
+      const steps = isTestScore ? 7 : 6;
+      const interval = isTestScore ? 0.086 : 0.105;
+      const firstFrequency = isTestScore ? 510 : 330;
+      for (let index = 0; index < steps; index += 1) {
+        const progress = index / Math.max(1, steps - 1);
+        scheduleTone(
+          firstFrequency * 2 ** (progress * (isTestScore ? 0.92 : 0.72)),
+          index * interval,
+          0.048,
+          isTestScore ? 0.029 : 0.024,
+          index % 2 === 0 ? "triangle" : "square",
+        );
+      }
+      scheduleTone(
+        isTestScore ? 1_020 : 620,
+        steps * interval,
+        isTestScore ? 0.13 : 0.1,
+        isTestScore ? 0.052 : 0.038,
+        "triangle",
+      );
+      return true;
+    }
+
+    // Every grade lands with the same physical stamp; the musical tail makes
+    // pass, fail, and ungraded demo outcomes unmistakably different.
+    schedulePaperImpact(0, cue === "stamp-fail" ? 0.15 : 0.105, 0.19, 760);
+    scheduleTone(
+      cue === "stamp-fail" ? 84 : 104,
+      0,
+      cue === "stamp-fail" ? 0.24 : 0.17,
+      0.24,
+      "sine",
+      cue === "stamp-fail" ? 42 : 58,
+    );
+
+    if (cue === "stamp-pass") {
+      [523.25, 659.25, 783.99, 1_046.5].forEach((frequency, index) => {
+        scheduleTone(
+          frequency,
+          0.055 + index * 0.025,
+          0.58 - index * 0.035,
+          0.062 - index * 0.006,
+          "triangle",
+        );
+      });
+      schedulePaperImpact(0.09, 0.28, 0.038, 4_800);
+    } else if (cue === "stamp-fail") {
+      scheduleTone(185, 0.055, 0.48, 0.062, "sawtooth", 138);
+      scheduleTone(139, 0.07, 0.53, 0.052, "square", 104);
+    } else {
+      scheduleTone(392, 0.06, 0.25, 0.046, "triangle", 330);
+    }
+    return true;
   }
 
   allNotesOff(immediate = false): void {

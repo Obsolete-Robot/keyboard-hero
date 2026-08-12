@@ -112,6 +112,14 @@ interface CelebrationCopy {
   variant: "judgement" | "milestone";
 }
 
+interface PerformanceFeedbackToast extends CelebrationCopy {
+  id: string;
+  groupKey: string;
+  midiNotes: number[];
+  points: number;
+  sequence: number;
+}
+
 function performanceCelebration(
   feedback: NoteFeedback | null,
   combo: number,
@@ -215,11 +223,10 @@ function performanceCelebration(
 
 function sustainCelebration(feedback: SustainFeedback): CelebrationCopy {
   const progress = Math.round(feedback.progress * 100);
-  const points = feedback.pointsAwarded.toLocaleString();
 
   if (feedback.grade === "full") {
     return {
-      eyebrow: `Full sustain // +${points}`,
+      eyebrow: "Full sustain",
       headline: "Hold locked!",
       detail: `${feedback.heldBeats.toFixed(1)} beats ringing clean.`,
       tone: "perfect",
@@ -228,7 +235,7 @@ function sustainCelebration(feedback: SustainFeedback): CelebrationCopy {
   }
   if (feedback.grade === "partial") {
     return {
-      eyebrow: `Sustain ${progress}% // +${points}`,
+      eyebrow: `Sustain ${progress}%`,
       headline: "Keep it singing",
       detail: "Good hold. Stay down through the full note tail.",
       tone: "good",
@@ -236,7 +243,7 @@ function sustainCelebration(feedback: SustainFeedback): CelebrationCopy {
     };
   }
   return {
-    eyebrow: `Released at ${progress}% // +${points}`,
+    eyebrow: `Released at ${progress}%`,
     headline: "Hold it longer",
     detail: "Keep the key down until the note tail clears the line.",
     tone: "miss",
@@ -560,10 +567,11 @@ export default function Home() {
   const activeSection =
     activeTrainingSection ?? currentSection(song, hero.positionBeat);
   const fingeringRange = hero.loop.enabled
-    ? { startBeat: hero.loop.startBeat, endBeat: hero.loop.endBeat }
+    ? { startBeat: hero.loop.startBeat, endBeat: hero.loop.endBeat, wrap: true }
     : {
         startBeat: activeSection?.startBeat ?? 0,
         endBeat: activeSection?.endBeat ?? song.durationBeats,
+        wrap: false,
       };
   const fingeringHands = useMemo<readonly KeyboardStageHand[]>(() => {
     const hands = new Set<KeyboardStageHand>();
@@ -752,15 +760,58 @@ export default function Home() {
   const celebration = hudSustainFeedback
     ? sustainCelebration(hudSustainFeedback)
     : performanceCelebration(hudFeedback, hero.score.combo);
-  const recentMissFeedback = useMemo(
-    () =>
-      hero.feedbackEvents
-        .filter((event) => event.grade === "miss")
-        .slice(-4),
-    [hero.feedbackEvents],
-  );
-  const noteMissIsLatest =
-    !hudSustainFeedback && hudFeedback?.grade === "miss";
+  const recentFeedbackToasts = useMemo(() => {
+    const orderedFeedback = [
+      ...hero.feedbackEvents.map((event) => ({
+        kind: "note" as const,
+        event,
+      })),
+      ...hero.sustainFeedbackEvents.map((event) => ({
+        kind: "sustain" as const,
+        event,
+      })),
+    ].sort((left, right) => left.event.sequence - right.event.sequence);
+    const toasts: PerformanceFeedbackToast[] = [];
+
+    for (const item of orderedFeedback) {
+      const groupKey = `${item.kind}:${item.event.groupId}`;
+      const previous = toasts.at(-1);
+      const copy =
+        item.kind === "note"
+          ? performanceCelebration(item.event, 0)
+          : sustainCelebration(item.event);
+      if (!copy) continue;
+
+      if (
+        previous?.groupKey === groupKey &&
+        !previous.midiNotes.includes(item.event.midi)
+      ) {
+        previous.midiNotes.push(item.event.midi);
+        previous.points += item.event.pointsAwarded;
+        previous.sequence = item.event.sequence;
+        if (item.kind === "note" && item.event.powerActivation) {
+          Object.assign(previous, copy);
+        }
+        continue;
+      }
+
+      toasts.push({
+        ...copy,
+        id: `${groupKey}:${item.event.sequence}`,
+        groupKey,
+        midiNotes: [item.event.midi],
+        points: item.event.pointsAwarded,
+        sequence: item.event.sequence,
+      });
+    }
+
+    const latestToast = toasts.at(-1);
+    if (latestToast && celebration?.variant === "milestone") {
+      Object.assign(latestToast, celebration);
+    }
+
+    return toasts.slice(-4);
+  }, [celebration, hero.feedbackEvents, hero.sustainFeedbackEvents]);
   const feedbackKey = hudSustainFeedback
     ? `${hudSustainFeedback.groupId}-${latestSustainFeedbackGroup.length}-${hudSustainFeedback.sequence}`
     : hudFeedback
@@ -788,15 +839,9 @@ export default function Home() {
             ? "building"
             : "base";
   const powerChargePercent = Math.round(hero.power.charge * 100);
-  const powerRemainingPercent = Math.round(
-    (hero.power.remainingBeats / Math.max(0.001, hero.power.durationBeats)) *
-      100,
-  );
-  const powerMeterPercent = hero.power.active
-    ? powerRemainingPercent
-    : powerChargePercent;
+  const powerMeterPercent = hero.power.active ? 100 : powerChargePercent;
   const powerMeterValueText = hero.power.active
-    ? `Power Mode active, ${hero.power.remainingBeats.toFixed(1)} beats remaining at ${hero.power.multiplier} times score`
+    ? `Power Mode active at ${hero.power.multiplier} times score until the streak breaks`
     : `${powerChargePercent} percent charged from correct notes`;
   const hasMIDIActivity =
     hero.midi.connectedName !== null &&
@@ -1280,6 +1325,7 @@ export default function Home() {
                 </span>
               </div>
 
+              <div className="performance-side">
               <div
                 className={`power-meter${
                   hero.power.active ? " is-active" : ""
@@ -1325,15 +1371,12 @@ export default function Home() {
                   <strong
                     aria-label={
                       hero.power.active
-                        ? `${hero.power.remainingBeats.toFixed(1)} beats remaining`
+                        ? `Power Mode active on a ${hero.score.combo} hit streak`
                         : `${hero.score.combo} hit streak`
                     }
-                    role={hero.power.active ? "timer" : undefined}
                   >
                     {hero.quickLoopEnabled
                       ? "No score"
-                      : hero.power.active
-                      ? `${hero.power.remainingBeats.toFixed(1)} beats`
                       : `${hero.score.combo}× streak`}
                   </strong>
                 </div>
@@ -1364,6 +1407,7 @@ export default function Home() {
                   </span>
                 </div>
               </div>
+              </div>
             </section>
 
             {hero.power.active && (
@@ -1373,37 +1417,24 @@ export default function Home() {
                 role="status"
                 aria-live="assertive"
               >
-                Power Mode activated. Double score for {hero.power.durationBeats}
-                beats. Keep the streak alive.
+                Power Mode activated. Double score until the streak breaks.
               </p>
             )}
 
-            {celebration &&
-              !noteMissIsLatest &&
-              !songComplete &&
-              (hero.countdown === null || hero.countdown <= 0) && (
-                <div
-                  aria-hidden="true"
-                  className={`stage-encouragement tone-${celebration.tone} variant-${celebration.variant}`}
-                  key={feedbackKey}
-                >
-                  <span className="encouragement-kicker">{celebration.eyebrow}</span>
-                  <strong>{celebration.headline}</strong>
-                  <span className="encouragement-detail">{celebration.detail}</span>
-                  {scoreDelta > 0 && (
-                    <b className="encouragement-points">+{scoreDelta.toLocaleString()}</b>
-                  )}
-                </div>
-              )}
-
             {!songComplete &&
-              recentMissFeedback.length > 0 &&
+              recentFeedbackToasts.length > 0 &&
               (hero.countdown === null || hero.countdown <= 0) && (
-                <div className="performance-miss-toasts" aria-hidden="true">
-                  {recentMissFeedback.map((event) => (
-                    <div className="performance-miss-toast" key={event.id}>
-                      <strong>Miss</strong>
-                      <span>Reset // next note</span>
+                <div className="performance-feedback-toasts" aria-hidden="true">
+                  {recentFeedbackToasts.map((toast) => (
+                    <div
+                      className={`performance-feedback-toast tone-${toast.tone}`}
+                      key={toast.id}
+                    >
+                      <strong>{toast.headline}</strong>
+                      <span>{toast.eyebrow}</span>
+                      {toast.points > 0 && (
+                        <b>+{toast.points.toLocaleString()}</b>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -2139,6 +2170,7 @@ export default function Home() {
       {songComplete && !hero.quickLoopEnabled && (
         <PerformanceResults
           noteResults={hero.noteResults}
+          onCue={hero.playPerformanceCue}
           onPractice={hero.restart}
           onReplay={replaySong}
           practiceMode={hero.settings.practiceMode}
