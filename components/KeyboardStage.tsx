@@ -74,9 +74,6 @@ export interface KeyboardHitFeedback {
 export interface KeyboardStagePowerState {
   charge: number;
   active: boolean;
-  progress: number;
-  remainingBeats: number;
-  durationBeats: number;
   multiplier: number;
   energy: number;
   activations: number;
@@ -109,7 +106,7 @@ export interface KeyboardStageProps {
   theme?: KeyboardStageTheme;
   /** 0 removes ambient motion; 1 is the authored look; values up to 2 add juice. */
   intensity?: number;
-  /** Earned combo-energy state. Power Mode remains controlled by the game engine. */
+  /** Earned combo energy. Active Power Mode lasts until the combo breaks. */
   power?: KeyboardStagePowerState;
   /** Number of upcoming beats visible on the highway. */
   travelBeats?: number;
@@ -142,6 +139,9 @@ interface KeyVisual extends KeyLayout {
   laneColor: string;
   laneMaterial: THREE.MeshBasicMaterial;
   landingMaterial: THREE.MeshBasicMaterial;
+  fingerLabel: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  fingerLabelMaterial: THREE.MeshBasicMaterial;
+  fingerLabelKey: string | null;
 }
 
 interface NoteVisual {
@@ -204,9 +204,6 @@ type StageStyle = CSSProperties & Record<`--kh-${string}`, string | number>;
 const DEFAULT_POWER_STATE: KeyboardStagePowerState = {
   charge: 0,
   active: false,
-  progress: 0,
-  remainingBeats: 0,
-  durationBeats: 8,
   multiplier: 1,
   energy: 0,
   activations: 0,
@@ -385,31 +382,11 @@ function noteColor(note: KeyboardStageNote, palette: KeyboardStagePalette) {
 type GuideHand = KeyboardStageHand;
 
 interface FingerGuideTarget {
+  midi: number;
   hand: GuideHand;
   finger: KeyboardFinger;
   state: "active" | "upcoming";
 }
-
-const FINGER_NAMES: Readonly<Record<KeyboardFinger, string>> = {
-  1: "Thumb",
-  2: "Index",
-  3: "Middle",
-  4: "Ring",
-  5: "Pinky",
-};
-
-const FINGER_ABBREVIATIONS: Readonly<Record<KeyboardFinger, string>> = {
-  1: "T",
-  2: "I",
-  3: "M",
-  4: "R",
-  5: "P",
-};
-
-const FINGERS_BY_HAND: Readonly<Record<GuideHand, readonly KeyboardFinger[]>> = {
-  left: [5, 4, 3, 2, 1],
-  right: [1, 2, 3, 4, 5],
-};
 
 function authoredFingeringForNote(
   note: KeyboardStageNote,
@@ -576,7 +553,7 @@ export default function KeyboardStage({
   const fingerGuide = useMemo(() => {
     const range = normalizeFingeringRange(fingeringRange);
     const presentHands = new Set<GuideHand>();
-    const targets = new Map<string, FingerGuideTarget>();
+    const targets = new Map<number, FingerGuideTarget>();
     const authoredNotes = notes.flatMap((note) => {
       const fingering = authoredFingeringForNote(note);
       return fingering && noteIsInFingeringRange(note, range)
@@ -619,10 +596,10 @@ export default function KeyboardStage({
         wrappedNextStartBeat !== null &&
         Math.abs(note.startBeat - wrappedNextStartBeat) <= 1e-6;
       if (!isActive && !isUpcoming) return;
-      const key = `${hand}:${finger}`;
-      const previous = targets.get(key);
+      const previous = targets.get(note.midi);
       if (!previous || (isActive && previous.state !== "active")) {
-        targets.set(key, {
+        targets.set(note.midi, {
+          midi: note.midi,
           hand,
           finger,
           state: isActive ? "active" : "upcoming",
@@ -646,7 +623,7 @@ export default function KeyboardStage({
       )
       .map(
         (target) =>
-          `${target.hand} hand ${target.finger} ${target.state}`,
+          `MIDI ${target.midi}, ${target.hand} hand ${target.finger} ${target.state}`,
       );
     return targets.length
       ? `Suggested fingering: ${targets.join(", ")}.`
@@ -658,6 +635,7 @@ export default function KeyboardStage({
   const currentTimeRef = useRef(currentTime);
   const pressedRef = useRef(pressedMidiNotes);
   const fingeringRangeRef = useRef(fingeringRange);
+  const fingerGuideRef = useRef(fingerGuide);
   const palette = useMemo(() => resolvePalette(theme), [theme]);
   const paletteRef = useRef(palette);
   const intensityRef = useRef(intensity);
@@ -678,6 +656,7 @@ export default function KeyboardStage({
     currentTimeRef.current = currentTime;
     pressedRef.current = pressedMidiNotes;
     fingeringRangeRef.current = fingeringRange;
+    fingerGuideRef.current = fingerGuide;
     paletteRef.current = palette;
     intensityRef.current = intensity;
     powerRef.current = power;
@@ -692,6 +671,7 @@ export default function KeyboardStage({
     currentTime,
     pressedMidiNotes,
     fingeringRange,
+    fingerGuide,
     palette,
     intensity,
     power,
@@ -1044,6 +1024,20 @@ export default function KeyboardStage({
     );
     const blackGeometry = new THREE.BoxGeometry(0.41, 0.39, 1.64);
     const landingGeometry = new THREE.RingGeometry(0.12, 0.23, 24);
+    const keyFingerLabelGeometry = new THREE.PlaneGeometry(1, 1);
+    const keyFingerLabelTextures = new Map<string, THREE.CanvasTexture>();
+    const getKeyFingerLabelTexture = (
+      hand: GuideHand,
+      finger: KeyboardFinger,
+    ) => {
+      const labelKey = `${hand}:${finger}`;
+      let texture = keyFingerLabelTextures.get(labelKey);
+      if (!texture) {
+        texture = makeFingerLabelTexture(hand, finger);
+        keyFingerLabelTextures.set(labelKey, texture);
+      }
+      return texture;
+    };
     const keyVisuals: KeyVisual[] = [];
     const keyMeshes: THREE.Mesh[] = [];
 
@@ -1082,6 +1076,34 @@ export default function KeyboardStage({
       landing.scale.x = key.isBlack ? 0.72 : 1;
       world.add(landing);
 
+      const fingerLabelMaterial = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        alphaTest: 0.04,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
+      const fingerLabel = new THREE.Mesh(
+        keyFingerLabelGeometry,
+        fingerLabelMaterial,
+      );
+      fingerLabel.name = `key-fingering-${key.midi}`;
+      fingerLabel.rotation.x = -Math.PI / 2;
+      fingerLabel.position.set(
+        key.x,
+        baseY + (key.isBlack ? 0.205 : 0.13),
+        key.isBlack ? 3.13 : 4.24,
+      );
+      fingerLabel.scale.set(
+        key.isBlack ? 0.36 : 0.5,
+        key.isBlack ? 0.22 : 0.3,
+        1,
+      );
+      fingerLabel.renderOrder = 40;
+      fingerLabel.visible = false;
+      world.add(fingerLabel);
+
       if (key.midi % 12 === 0 && !key.isBlack) {
         const cMarker = new THREE.Mesh(
           new THREE.BoxGeometry(0.2, 0.012, 0.045),
@@ -1099,6 +1121,9 @@ export default function KeyboardStage({
         laneColor: pitchColor,
         laneMaterial: laneMaterials[index],
         landingMaterial,
+        fingerLabel,
+        fingerLabelMaterial,
+        fingerLabelKey: null,
       });
     });
 
@@ -2109,6 +2134,9 @@ export default function KeyboardStage({
       const liveIds = new Set<string | number>();
       const sustainedMidi = new Set<number>();
       const labelRange = normalizeFingeringRange(fingeringRangeRef.current);
+      const fingerTargetsByMidi = new Map(
+        fingerGuideRef.current.targets.map((target) => [target.midi, target]),
+      );
       notesRef.current.forEach((note) => {
         if (
           note.midi < FIRST_MIDI_NOTE ||
@@ -2316,8 +2344,39 @@ export default function KeyboardStage({
         const missedEnergy = missFlare[index];
         const holdMatch = matchedHoldStrength[index];
         const sustaining = sustainedMidi.has(key.midi);
+        const fingerTarget = fingerTargetsByMidi.get(key.midi);
         const targetY = key.baseY - (active ? 0.055 : 0);
         key.mesh.position.y += (targetY - key.mesh.position.y) * 0.32;
+        if (fingerTarget) {
+          const fingerLabelKey = `${fingerTarget.hand}:${fingerTarget.finger}`;
+          if (key.fingerLabelKey !== fingerLabelKey) {
+            key.fingerLabelMaterial.map = getKeyFingerLabelTexture(
+              fingerTarget.hand,
+              fingerTarget.finger,
+            );
+            key.fingerLabelMaterial.needsUpdate = true;
+            key.fingerLabelKey = fingerLabelKey;
+          }
+          key.fingerLabel.visible = true;
+          key.fingerLabel.position.y =
+            key.mesh.position.y + (key.isBlack ? 0.205 : 0.13);
+          key.fingerLabelMaterial.opacity +=
+            ((fingerTarget.state === "active" ? 1 : 0.9) -
+              key.fingerLabelMaterial.opacity) *
+            0.36;
+          const labelPulse =
+            fingerTarget.state === "active" && !reduceMotion
+              ? 1 + Math.sin(now * 0.012 + index) * 0.045
+              : 1;
+          key.fingerLabel.scale.set(
+            (key.isBlack ? 0.36 : 0.5) * labelPulse,
+            (key.isBlack ? 0.22 : 0.3) * labelPulse,
+            1,
+          );
+        } else {
+          key.fingerLabel.visible = false;
+          key.fingerLabelMaterial.opacity = 0;
+        }
         key.mesh.scale.y +=
           (1 +
             (reduceMotion ? 0 : hitEnergy * 0.18) +
@@ -2651,6 +2710,8 @@ export default function KeyboardStage({
       whiteGeometry.dispose();
       blackGeometry.dispose();
       landingGeometry.dispose();
+      keyFingerLabelGeometry.dispose();
+      keyFingerLabelTextures.forEach((texture) => texture.dispose());
       renderer.dispose();
       renderer.forceContextLoss();
     };
@@ -2711,60 +2772,9 @@ export default function KeyboardStage({
       )}
 
       {!webglError && fingerGuide.hands.length > 0 && (
-        <div
-          className="kh-stage__finger-guide"
-          role="group"
-          aria-label="Suggested piano finger guide"
-        >
-          <span className="kh-stage__finger-guide-title" aria-hidden="true">
-            <span className="kh-stage__finger-guide-title-full">
-              SUGGESTED FINGERING
-            </span>
-            <span className="kh-stage__finger-guide-title-compact">
-              SUGGESTED
-            </span>
-          </span>
-          <span className="kh-stage__finger-guide-legend" aria-hidden="true">
-            T thumb · I index · M middle · R ring · P pinky
-          </span>
-          <span className="kh-stage__finger-guide-summary">{fingerGuideLabel}</span>
-          <div className="kh-stage__finger-guide-hands">
-            {fingerGuide.hands.map((hand) => (
-              <div
-                className="kh-stage__finger-hand"
-                data-hand={hand}
-                key={hand}
-                role="group"
-                aria-label={`${hand === "left" ? "Left" : "Right"} hand`}
-              >
-                <span className="kh-stage__finger-hand-label" aria-hidden="true">
-                  {hand === "left" ? "L" : "R"}
-                </span>
-                <div className="kh-stage__finger-row">
-                  {FINGERS_BY_HAND[hand].map((finger) => {
-                    const target = fingerGuide.targets.find(
-                      (candidate) =>
-                        candidate.hand === hand && candidate.finger === finger,
-                    );
-                    return (
-                      <span
-                        className={`kh-stage__finger${
-                          target ? ` is-${target.state}` : ""
-                        }`}
-                        key={finger}
-                        role="img"
-                        aria-label={`${hand === "left" ? "Left" : "Right"} hand, finger ${finger}, ${FINGER_NAMES[finger]}${target ? `, ${target.state}` : ", ready"}`}
-                      >
-                        <b>{finger}</b>
-                        <small>{FINGER_ABBREVIATIONS[finger]}</small>
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <span className="sr-only" role="status" aria-live="polite">
+          {fingerGuideLabel}
+        </span>
       )}
 
       {showHud && !webglError && (
