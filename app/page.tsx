@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   AudioLines,
+  Check,
   ChevronDown,
   CircleGauge,
   Headphones,
@@ -57,6 +58,15 @@ import {
   type ChallengeLevel,
   type SongFamily,
 } from "@/lib/songCatalog";
+import {
+  SONG_PROGRESS_STORAGE_KEY,
+  countClearedSongs,
+  createSongProgress,
+  getSongProgress,
+  parseSongProgress,
+  recordSongCompletion,
+  type SongProgressState,
+} from "@/lib/songProgress";
 import {
   TRAINING_LESSONS,
   TRAINING_SONGS,
@@ -303,9 +313,11 @@ function Difficulty({ value }: { value: number }) {
 }
 
 function ChallengeSelector({
+  clearedSongs,
   value,
   onChange,
 }: {
+  clearedSongs: number;
   value: ChallengeLevel;
   onChange: (challenge: ChallengeLevel) => void;
 }) {
@@ -315,6 +327,9 @@ function ChallengeSelector({
       <div className="challenge-picker-copy" aria-hidden="true">
         <span>Choose your chart</span>
         <strong>{CHALLENGE_DETAILS[value].shortDescription}</strong>
+        <small>
+          {clearedSongs} of {SONG_FAMILIES.length} stages cleared
+        </small>
       </div>
       <div className="challenge-segments">
         {CHALLENGE_LEVELS.map((challenge) => (
@@ -340,14 +355,21 @@ function SongLibrary({
   onClose,
   onChallengeChange,
   onSelect,
+  progress,
 }: {
   activeFamilyId: string;
   challengeLevel: ChallengeLevel;
   onClose: () => void;
   onChallengeChange: (challenge: ChallengeLevel) => void;
   onSelect: (family: SongFamily) => void;
+  progress: SongProgressState;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
+  const clearedSongs = countClearedSongs(
+    progress,
+    SONG_FAMILIES.map((family) => family.id),
+    challengeLevel,
+  );
   const careerTiers = [...new Set(SONG_FAMILIES.map((family) => family.careerTier))]
     .sort((left, right) => left - right)
     .map((tier) => ({
@@ -461,6 +483,7 @@ function SongLibrary({
         </header>
 
         <ChallengeSelector
+          clearedSongs={clearedSongs}
           onChange={onChallengeChange}
           value={challengeLevel}
         />
@@ -485,13 +508,22 @@ function SongLibrary({
                 <div className="song-grid">
                   {families.map((family) => {
                     const chart = getSongChart(family, challengeLevel);
+                    const savedProgress = getSongProgress(
+                      progress,
+                      family.id,
+                      challengeLevel,
+                    );
                     return (
                       <button
-                        aria-label={`Play ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}`}
+                        aria-label={`Play ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}. ${
+                          savedProgress
+                            ? `Cleared ${savedProgress.completedRuns} times. Best score ${savedProgress.bestScore}.`
+                            : "Not cleared yet."
+                        }`}
                         aria-pressed={family.id === activeFamilyId}
                         className={`song-card${
                           family.id === activeFamilyId ? " selected" : ""
-                        }`}
+                        }${savedProgress ? " is-cleared" : ""}`}
                         key={family.id}
                         onClick={() => onSelect(family)}
                         type="button"
@@ -506,6 +538,29 @@ function SongLibrary({
                         <div className="song-composer">
                           {family.subtitle ? `${family.subtitle} · ` : ""}
                           {family.composer}
+                        </div>
+                        <div
+                          className={`song-card-progress${
+                            savedProgress ? " is-cleared" : ""
+                          }`}
+                        >
+                          <span>
+                            {savedProgress ? (
+                              <>
+                                <Check size={11} aria-hidden="true" /> Cleared
+                                {savedProgress.completedRuns > 1
+                                  ? ` ×${savedProgress.completedRuns}`
+                                  : ""}
+                              </>
+                            ) : (
+                              "Not cleared"
+                            )}
+                          </span>
+                          <strong>
+                            {savedProgress
+                              ? `Best ${savedProgress.bestScore.toLocaleString()}`
+                              : "Finish a scored run"}
+                          </strong>
                         </div>
                         <Difficulty value={chart.difficulty} />
                         <div className="skill-chips">
@@ -544,6 +599,10 @@ export default function Home() {
   const [trainingSectionId, setTrainingSectionId] = useState<string | null>(null);
   const [trainingProgress, setTrainingProgress] = useState<TrainingProgress>({});
   const [trainingProgressReady, setTrainingProgressReady] = useState(false);
+  const [songProgress, setSongProgress] = useState<SongProgressState>(() =>
+    createSongProgress(),
+  );
+  const [songProgressReady, setSongProgressReady] = useState(false);
   const [pendingTrainingSetup, setPendingTrainingSetup] = useState<{
     songId: string;
     sectionId: string;
@@ -588,6 +647,7 @@ export default function Home() {
   }, [pauseForLibrary]);
   const isFinishing = hero.isFinishing;
   const songComplete = hero.songComplete;
+  const recordedCompletionRef = useRef<string | null>(null);
   const positionBeatRef = useRef(hero.positionBeat);
   const lastRegularSongIdRef = useRef(DEFAULT_SONG.id);
   const trainingReturnBackingBandRef = useRef(
@@ -669,6 +729,75 @@ export default function Home() {
   }, [trainingProgress, trainingProgressReady]);
 
   useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      let storedProgress = createSongProgress();
+      try {
+        storedProgress = parseSongProgress(
+          window.localStorage.getItem(SONG_PROGRESS_STORAGE_KEY),
+        );
+      } catch {
+        // Device-local progress is optional in restricted/private browser modes.
+      }
+      if (!cancelled) {
+        setSongProgress(storedProgress);
+        setSongProgressReady(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!songProgressReady) return;
+    try {
+      window.localStorage.setItem(
+        SONG_PROGRESS_STORAGE_KEY,
+        JSON.stringify(songProgress),
+      );
+    } catch {
+      // The game remains usable when device storage is unavailable.
+    }
+  }, [songProgress, songProgressReady]);
+
+  useEffect(() => {
+    if (!songComplete) {
+      recordedCompletionRef.current = null;
+      return;
+    }
+    if (
+      !songProgressReady ||
+      activeTrainingLesson ||
+      hero.quickLoopEnabled ||
+      hero.settings.practiceMode === "listen" ||
+      recordedCompletionRef.current === song.id
+    ) {
+      return;
+    }
+
+    recordedCompletionRef.current = song.id;
+    setSongProgress((current) =>
+      recordSongCompletion(
+        current,
+        selectedSongFamily.id,
+        challengeLevel,
+        hero.score.points,
+      ),
+    );
+  }, [
+    activeTrainingLesson,
+    challengeLevel,
+    hero.quickLoopEnabled,
+    hero.score.points,
+    hero.settings.practiceMode,
+    selectedSongFamily.id,
+    song.id,
+    songComplete,
+    songProgressReady,
+  ]);
+
+  useEffect(() => {
     const handleTransportKeys = (event: globalThis.KeyboardEvent) => {
       if (libraryOpen || trainingOpen || songComplete) return;
       const target = event.target;
@@ -713,6 +842,11 @@ export default function Home() {
         endBeat: activeSection?.endBeat ?? song.durationBeats,
         wrap: false,
       };
+  const currentSongProgress = getSongProgress(
+    songProgress,
+    selectedSongFamily.id,
+    challengeLevel,
+  );
   const fingeringHands = useMemo<readonly KeyboardStageHand[]>(() => {
     const hands = new Set<KeyboardStageHand>();
     songFingering.notes.forEach((recommendation) => {
@@ -1361,6 +1495,9 @@ export default function Home() {
                 <>{CHALLENGE_DETAILS[challengeLevel].label} · </>
               )}
               {song.key} · {song.timeSignature[0]}/{song.timeSignature[1]}
+              {!activeTrainingLesson && currentSongProgress && (
+                <> · Best {currentSongProgress.bestScore.toLocaleString()}</>
+              )}
             </div>
           </div>
           <button className="library-button" onClick={openLibrary}>
@@ -2368,6 +2505,7 @@ export default function Home() {
           onClose={closeLibrary}
           onChallengeChange={selectChallenge}
           onSelect={selectSong}
+          progress={songProgress}
         />
       )}
 

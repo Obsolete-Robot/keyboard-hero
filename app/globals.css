@@ -3229,6 +3229,13 @@ kbd {
   white-space: nowrap;
 }
 
+.challenge-picker-copy small {
+  color: rgba(243, 239, 227, 0.48);
+  font: 750 8px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .challenge-segments {
   display: grid;
   grid-template-columns: repeat(3, minmax(84px, 1fr));
@@ -3361,6 +3368,10 @@ kbd {
   transform: translateY(-2px);
 }
 
+.song-card.is-cleared {
+  border-top-color: rgba(215, 255, 63, 0.78);
+}
+
 .song-card.selected::before {
   position: absolute;
   top: 0;
@@ -3402,6 +3413,38 @@ kbd {
   margin-top: 4px;
   color: var(--muted);
   font: 10px/1.4 var(--font-mono);
+}
+
+.song-card-progress {
+  margin-top: 12px;
+  padding: 7px 0;
+  border-top: 1px solid rgba(243, 239, 227, 0.09);
+  border-bottom: 1px solid rgba(243, 239, 227, 0.09);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(243, 239, 227, 0.38);
+  font: 800 8px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.song-card-progress span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.song-card-progress strong {
+  color: rgba(243, 239, 227, 0.5);
+  font: inherit;
+  letter-spacing: 0.02em;
+}
+
+.song-card-progress.is-cleared span,
+.song-card-progress.is-cleared strong {
+  color: var(--acid);
 }
 
 .difficulty {
