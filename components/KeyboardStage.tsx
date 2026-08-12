@@ -688,26 +688,6 @@ export default function KeyboardStage({
 
     return { hands, targets: [...targets.values()] };
   }, [currentBeat, fingeringHands, fingeringRange, notes]);
-  const fingerGuideLabel = useMemo(() => {
-    if (fingerGuide.hands.length === 0) return "No finger targets are available.";
-    const targets = [...fingerGuide.targets]
-      .sort((left, right) =>
-        left.hand === right.hand
-          ? left.hand === "left"
-            ? right.finger - left.finger
-            : left.finger - right.finger
-          : left.hand === "left"
-            ? -1
-            : 1,
-      )
-      .map(
-        (target) =>
-          `MIDI ${target.midi}, ${target.hand} hand ${target.finger} ${target.state}`,
-      );
-    return targets.length
-      ? `Suggested fingering: ${targets.join(", ")}.`
-      : `Suggested fingering ready for ${fingerGuide.hands.join(" and ")} hand.`;
-  }, [fingerGuide]);
   const notesRef = useRef(notes);
   const nextNoteStartRef = useRef(nextNoteStartById);
   const currentBeatRef = useRef(currentBeat);
@@ -2950,65 +2930,6 @@ export default function KeyboardStage({
             <i />
             <span>{strikeLabel}</span>
             <i />
-          </div>
-        </div>
-      )}
-
-      {!webglError && fingerGuide.hands.length > 0 && (
-        <div
-          className="kh-stage__finger-guide"
-          role="group"
-          aria-label="Suggested piano finger guide"
-        >
-          <span className="kh-stage__finger-guide-title" aria-hidden="true">
-            <span className="kh-stage__finger-guide-title-full">
-              SUGGESTED FINGERING
-            </span>
-            <span className="kh-stage__finger-guide-title-compact">
-              SUGGESTED
-            </span>
-          </span>
-          <span className="kh-stage__finger-guide-legend" aria-hidden="true">
-            T thumb · I index · M middle · R ring · P pinky
-          </span>
-          <span className="kh-stage__finger-guide-summary">
-            {fingerGuideLabel}
-          </span>
-          <div className="kh-stage__finger-guide-hands">
-            {fingerGuide.hands.map((hand) => (
-              <div
-                className="kh-stage__finger-hand"
-                data-hand={hand}
-                key={hand}
-                role="group"
-                aria-label={`${hand === "left" ? "Left" : "Right"} hand`}
-              >
-                <span className="kh-stage__finger-hand-label" aria-hidden="true">
-                  {hand === "left" ? "L" : "R"}
-                </span>
-                <div className="kh-stage__finger-row">
-                  {FINGERS_BY_HAND[hand].map((finger) => {
-                    const target = fingerGuide.targets.find(
-                      (candidate) =>
-                        candidate.hand === hand && candidate.finger === finger,
-                    );
-                    return (
-                      <span
-                        className={`kh-stage__finger${
-                          target ? ` is-${target.state}` : ""
-                        }`}
-                        key={finger}
-                        role="img"
-                        aria-label={`${hand === "left" ? "Left" : "Right"} hand, finger ${finger}, ${FINGER_NAMES[finger]}${target ? `, ${target.state}` : ", ready"}`}
-                      >
-                        <b>{finger}</b>
-                        <small>{FINGER_ABBREVIATIONS[finger]}</small>
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       )}
