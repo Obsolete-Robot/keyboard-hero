@@ -754,6 +754,7 @@ export default function KeyboardStage({
     let cameraKick = 0;
     let flashEnergy = 0;
     let powerSurge = 0;
+    let displayedPowerEnergy = 0;
     let lastPowerActivation = powerRef.current.activations;
     let viewportWidth = 1;
     let viewportHeight = 1;
@@ -1745,7 +1746,7 @@ export default function KeyboardStage({
         if (!miss) cameraKick = Math.max(cameraKick, eventIntensity * 0.18);
       }
       flashEnergy = Math.max(flashEnergy, miss ? 0.22 : eventIntensity * 1.3);
-      if (event.powerActivation && !reduceMotion) powerSurge = 1;
+      if (event.powerActivation && !reduceMotion) powerSurge = 0.62;
     };
 
     const setAimMarkerTone = (
@@ -2057,9 +2058,14 @@ export default function KeyboardStage({
       const visibleBeats = Math.max(1, travelBeatsRef.current);
       const pressedByPointer = new Set(pointerNotes.values());
       const powerState = powerRef.current;
-      const powerEnergy = powerState.active
+      const targetPowerEnergy = powerState.active
         ? clamp(powerState.energy, 0, 1)
         : 0;
+      const powerResponse = targetPowerEnergy > displayedPowerEnergy ? 1.9 : 5.5;
+      displayedPowerEnergy +=
+        (targetPowerEnergy - displayedPowerEnergy) *
+        (1 - Math.exp(-deltaSeconds * powerResponse));
+      const powerEnergy = displayedPowerEnergy;
       const powerPulse = powerState.active
         ? reduceMotion
           ? 0.72
@@ -2070,11 +2076,11 @@ export default function KeyboardStage({
         const activated = powerState.activations > lastPowerActivation;
         lastPowerActivation = powerState.activations;
         if (activated) {
-          flashEnergy = Math.max(flashEnergy, 2.4);
+          flashEnergy = Math.max(flashEnergy, 1.15);
           if (!reduceMotion) {
-            powerSurge = 1;
-            cameraShake = Math.max(cameraShake, 0.22);
-            cameraKick = Math.max(cameraKick, 0.72);
+            powerSurge = Math.max(powerSurge, 0.62);
+            cameraShake = Math.max(cameraShake, 0.08);
+            cameraKick = Math.max(cameraKick, 0.28);
           } else {
             powerSurge = 0;
           }
