@@ -17,7 +17,19 @@ import {
   isValidMIDICalibrationSpan,
   mapMIDINoteToKeyboardRange,
 } from "@/lib/midiCalibration";
+import {
+  advancePowerMode,
+  applyPowerJudgement,
+  authoredChordGroupId,
+  completePowerMode,
+  createPowerModeState,
+  latchChordScoreMultiplier,
+  pointsForJudgement,
+  type KeyboardHeroPowerState,
+} from "@/lib/powerMode";
 import { MIDI_MAX, MIDI_MIN, type Song, type SongNote } from "@/lib/songs";
+
+export type { KeyboardHeroPowerState } from "@/lib/powerMode";
 
 export type PracticeMode = "flow" | "wait" | "listen";
 export type NoteGrade = "perfect" | "great" | "good" | "miss";
@@ -33,6 +45,16 @@ export interface NoteResult {
   midi: number;
   grade: NoteGrade;
   offsetMs: number;
+}
+
+export interface NoteFeedback extends NoteResult {
+  /** Shared by all resolved tones in one authored chord; extras fall back to their unique id. */
+  groupId: string;
+  /** Exact score delta already including combo bonus and POWER multiplier. */
+  pointsAwarded: number;
+  multiplier: number;
+  /** True only for the successful judgement that filled the power meter. */
+  powerActivation: boolean;
 }
 
 export interface KeyboardHeroScore {
@@ -129,10 +151,11 @@ export interface KeyboardHeroCore {
   countdown: number | null;
   pressedNotes: Set<number>;
   noteResults: Map<string, NoteResult>;
-  latestFeedback: NoteResult | null;
+  latestFeedback: NoteFeedback | null;
   /** Recent uniquely keyed hit/miss events, including simultaneous chord tones. */
-  feedbackEvents: NoteResult[];
+  feedbackEvents: NoteFeedback[];
   score: KeyboardHeroScore;
+  power: KeyboardHeroPowerState;
   midi: KeyboardHeroMIDIState;
   backingBand: KeyboardHeroBackingBandState;
   settings: KeyboardHeroSettings;
@@ -412,9 +435,12 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const [noteResults, setNoteResults] = useState<Map<string, NoteResult>>(
     () => new Map(),
   );
-  const [latestFeedback, setLatestFeedback] = useState<NoteResult | null>(null);
-  const [feedbackEvents, setFeedbackEvents] = useState<NoteResult[]>([]);
+  const [latestFeedback, setLatestFeedback] = useState<NoteFeedback | null>(null);
+  const [feedbackEvents, setFeedbackEvents] = useState<NoteFeedback[]>([]);
   const [score, setScore] = useState<KeyboardHeroScore>(EMPTY_SCORE);
+  const [power, setPower] = useState<KeyboardHeroPowerState>(() =>
+    createPowerModeState(),
+  );
   const [backingBand, setBackingBand] = useState<KeyboardHeroBackingBandState>({
     active: false,
     energy: 0,
@@ -441,6 +467,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     calibration: { ...EMPTY_MIDI_CALIBRATION },
     error: null,
   }));
+  const powerChordKeyByNoteId = useMemo(() => {
+    const keys = new Map<string, string>();
+    for (const note of song.notes) {
+      keys.set(note.id, authoredChordGroupId(song.id, note.startBeat));
+    }
+    return keys;
+  }, [song.id, song.notes]);
 
   const synthRef = useRef<KeyboardSynth | null>(null);
   const midiAccessRef = useRef<MIDIAccessLike | null>(null);
@@ -471,6 +504,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const noteOffRef = useRef<(midi: number, source?: string) => void>(() => undefined);
   const positionRef = useRef(0);
   const resultsRef = useRef(noteResults);
+  const scoreRef = useRef<KeyboardHeroScore>(EMPTY_SCORE);
+  const powerRef = useRef<KeyboardHeroPowerState>(power);
+  const chordScoreMultipliersRef = useRef<Map<string, number>>(new Map());
   const settingsRef = useRef(settings);
   const settingsReadyRef = useRef(false);
   const loopRef = useRef(loop);
@@ -496,9 +532,46 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       synthRef.current.setAccompanimentVolume(
         settingsRef.current.backingBandMix,
       );
+      synthRef.current.setPowerMode(
+        powerRef.current.active,
+        powerRef.current.energy,
+      );
     }
     return synthRef.current;
   }, []);
+
+  const commitPower = useCallback((next: KeyboardHeroPowerState) => {
+    if (next === powerRef.current) return;
+    powerRef.current = next;
+    setPower(next);
+    try {
+      synthRef.current?.setPowerMode(next.active, next.energy);
+    } catch {
+      // POWER presentation must not be able to interrupt transport/scoring.
+    }
+  }, []);
+
+  const resetPower = useCallback(() => {
+    const next = createPowerModeState();
+    powerRef.current = next;
+    setPower(next);
+    try {
+      synthRef.current?.setPowerMode(false, 0);
+    } catch {
+      // Audio teardown is best-effort; gameplay state remains authoritative.
+    }
+  }, []);
+
+  const advancePowerByBeats = useCallback(
+    (beats: number) => {
+      commitPower(advancePowerMode(powerRef.current, beats));
+    },
+    [commitPower],
+  );
+
+  const finishPower = useCallback(() => {
+    commitPower(completePowerMode(powerRef.current));
+  }, [commitPower]);
 
   const commitPosition = useCallback(
     (beat: number) => {
@@ -759,13 +832,25 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     [setBackingBandFrame, song, synth],
   );
 
-  const resetScore = useCallback(() => {
-    resultsRef.current = new Map();
-    setNoteResults(new Map());
-    setLatestFeedback(null);
-    setFeedbackEvents([]);
-    setScore(EMPTY_SCORE);
-  }, []);
+  const clearAttempt = useCallback(
+    (preservePower: boolean) => {
+      resultsRef.current = new Map();
+      setNoteResults(new Map());
+      setLatestFeedback(null);
+      setFeedbackEvents([]);
+      chordScoreMultipliersRef.current.clear();
+      scoreRef.current = EMPTY_SCORE;
+      setScore(EMPTY_SCORE);
+      if (!preservePower) resetPower();
+    },
+    [resetPower],
+  );
+
+  const resetScore = useCallback(() => clearAttempt(false), [clearAttempt]);
+  const resetAttemptForLoop = useCallback(
+    () => clearAttempt(true),
+    [clearAttempt],
+  );
 
   const pause = useCallback(() => {
     if (midiCalibrationRef.current.active) cancelMIDICalibration();
@@ -782,11 +867,19 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     preRollVisualBeatRef.current = positionRef.current;
     setCountdown(null);
     if (!wasFinishing) setVisualBeat(positionRef.current);
-    if (wasFinishing) setSongComplete(true);
+    if (wasFinishing) {
+      finishPower();
+      setSongComplete(true);
+    }
     lastMetronomeBeatRef.current = null;
     stopListenVoices();
     stopBackingBand(true);
-  }, [cancelMIDICalibration, stopBackingBand, stopListenVoices]);
+  }, [
+    cancelMIDICalibration,
+    finishPower,
+    stopBackingBand,
+    stopListenVoices,
+  ]);
 
   const play = useCallback(() => {
     if (isPlayingRef.current) return;
@@ -869,42 +962,72 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     [seekBeat],
   );
 
-  const registerResult = useCallback((result: NoteResult) => {
-    resultsRef.current = new Map(resultsRef.current).set(result.id, result);
-    setNoteResults(resultsRef.current);
-    feedbackSequenceRef.current += 1;
-    const feedbackEvent: NoteResult = {
-      ...result,
-      id: `${result.id}:feedback-${feedbackSequenceRef.current}`,
-    };
-    setLatestFeedback(feedbackEvent);
-    setFeedbackEvents((current) =>
-      [...current, feedbackEvent].slice(-FEEDBACK_HISTORY_LIMIT),
-    );
-    setScore((current) => {
+  const registerResult = useCallback(
+    (result: NoteResult) => {
+      if (settingsRef.current.practiceMode === "listen") return;
+      // Song-note ids are stable across the result map. This guard also makes
+      // RAF misses racing a physical chord incapable of awarding twice.
+      if (resultsRef.current.has(result.id)) return;
+
+      const chordKey = powerChordKeyByNoteId.get(result.id);
+      const multiplier = chordKey
+        ? latchChordScoreMultiplier(
+            chordScoreMultipliersRef.current,
+            chordKey,
+            powerRef.current.multiplier,
+          )
+        : 1;
+      const powerOutcome = applyPowerJudgement(
+        powerRef.current,
+        result.grade,
+      );
+      commitPower(powerOutcome.state);
+
+      const currentScore = scoreRef.current;
+      let nextScore: KeyboardHeroScore;
+      let pointsAwarded = 0;
       if (result.grade === "miss") {
-        const misses = current.misses + 1;
-        return {
-          ...current,
+        const misses = currentScore.misses + 1;
+        nextScore = {
+          ...currentScore,
           combo: 0,
           misses,
-          accuracy: scoreAccuracy(current.hits, misses),
+          accuracy: scoreAccuracy(currentScore.hits, misses),
+        };
+      } else {
+        const combo = currentScore.combo + 1;
+        const hits = currentScore.hits + 1;
+        pointsAwarded = pointsForJudgement(result.grade, combo, multiplier);
+        nextScore = {
+          points: currentScore.points + pointsAwarded,
+          combo,
+          bestCombo: Math.max(currentScore.bestCombo, combo),
+          hits,
+          misses: currentScore.misses,
+          accuracy: scoreAccuracy(hits, currentScore.misses),
         };
       }
-      const combo = current.combo + 1;
-      const gradePoints =
-        result.grade === "perfect" ? 1000 : result.grade === "great" ? 700 : 450;
-      const hits = current.hits + 1;
-      return {
-        points: current.points + gradePoints + Math.min(500, combo * 10),
-        combo,
-        bestCombo: Math.max(current.bestCombo, combo),
-        hits,
-        misses: current.misses,
-        accuracy: scoreAccuracy(hits, current.misses),
+      scoreRef.current = nextScore;
+      setScore(nextScore);
+
+      resultsRef.current = new Map(resultsRef.current).set(result.id, result);
+      setNoteResults(resultsRef.current);
+      feedbackSequenceRef.current += 1;
+      const feedbackEvent: NoteFeedback = {
+        ...result,
+        id: `${result.id}:feedback-${feedbackSequenceRef.current}`,
+        groupId: chordKey ?? result.id,
+        pointsAwarded,
+        multiplier,
+        powerActivation: powerOutcome.activated,
       };
-    });
-  }, []);
+      setLatestFeedback(feedbackEvent);
+      setFeedbackEvents((current) =>
+        [...current, feedbackEvent].slice(-FEEDBACK_HISTORY_LIMIT),
+      );
+    },
+    [commitPower, powerChordKeyByNoteId],
+  );
 
   const noteOn = useCallback(
     (midiNote: number, velocity = 100, source = "manual") => {
@@ -1023,6 +1146,12 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       ) {
         stopListenVoices();
       }
+      if (
+        settingsRef.current.practiceMode !== "listen" &&
+        practiceMode === "listen"
+      ) {
+        resetPower();
+      }
       settingsRef.current = { ...settingsRef.current, practiceMode };
       setSettings((current) => {
         const next = { ...current, practiceMode };
@@ -1031,7 +1160,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       });
       if (practiceMode === "listen" && !isPlayingRef.current) play();
     },
-    [play, stopListenVoices],
+    [play, resetPower, stopListenVoices],
   );
 
   const setMetronomeEnabled = useCallback((metronomeEnabled: boolean) => {
@@ -1692,6 +1821,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           song.durationBeats + boundedSeconds * postRollBeatRateRef.current,
         );
         if (elapsedSeconds >= postRollDuration) {
+          finishPower();
           isFinishingRef.current = false;
           isPlayingRef.current = false;
           setIsFinishing(false);
@@ -1750,6 +1880,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const activeLoop = loopRef.current;
       const loopEnd = activeLoop.enabled ? activeLoop.endBeat : song.durationBeats;
       let waitBlocked = false;
+      let loopWrapped = false;
 
       if (currentSettings.practiceMode === "wait") {
         const blockingBeat = song.notes
@@ -1804,12 +1935,22 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         playMetronomeSafely(beatNumber % song.timeSignature[0] === 0);
       }
 
+      const powerBeatsThisFrame = Math.max(
+        0,
+        Math.min(nextBeat, loopEnd) - oldBeat,
+      );
+      const loopPowerBeatsThisFrame = Math.max(0, nextBeat - oldBeat);
+
       if (nextBeat >= loopEnd) {
         if (activeLoop.enabled) {
+          loopWrapped = true;
           nextBeat = activeLoop.startBeat + (nextBeat - loopEnd);
           stopListenVoices();
           stopBackingBand(true);
-          if (currentSettings.practiceMode !== "listen") resetScore();
+          if (currentSettings.practiceMode !== "listen") {
+            resetAttemptForLoop();
+            advancePowerByBeats(loopPowerBeatsThisFrame);
+          }
           lastMetronomeBeatRef.current = null;
         } else {
           if (currentSettings.practiceMode === "flow") {
@@ -1825,6 +1966,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
                   (song.durationBeats - note.startBeat) * millisecondsPerBeat,
               });
             }
+          }
+          if (currentSettings.practiceMode !== "listen") {
+            advancePowerByBeats(powerBeatsThisFrame);
           }
           commitPosition(song.durationBeats);
           stopListenVoices();
@@ -1844,6 +1988,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         }
       }
 
+      if (!loopWrapped && currentSettings.practiceMode !== "listen") {
+        advancePowerByBeats(powerBeatsThisFrame);
+      }
+
       if (waitBlocked) {
         if (backingBandActiveRef.current) stopBackingBand(true);
       } else {
@@ -1856,11 +2004,14 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
   }, [
+    advancePowerByBeats,
     commitPosition,
+    finishPower,
     isPlaying,
     pause,
     playMetronomeSafely,
     registerResult,
+    resetAttemptForLoop,
     resetScore,
     song,
     stopBackingBand,
@@ -1875,6 +2026,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (midiAccessRef.current) midiAccessRef.current.onstatechange = null;
       if (midiCalibrationTimeoutRef.current !== null) {
         clearTimeout(midiCalibrationTimeoutRef.current);
+      }
+      try {
+        synthRef.current?.setPowerMode(false, 0);
+      } catch {
+        // Disposal below remains authoritative if the effects graph is broken.
       }
       void synthRef.current?.dispose();
     },
@@ -1904,6 +2060,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     latestFeedback,
     feedbackEvents,
     score,
+    power,
     midi,
     backingBand,
     settings,

@@ -54,6 +54,18 @@ export interface KeyboardHitFeedback {
   beat?: number;
   time?: number;
   strength?: number;
+  powerActivation?: boolean;
+}
+
+export interface KeyboardStagePowerState {
+  charge: number;
+  active: boolean;
+  progress: number;
+  remainingBeats: number;
+  durationBeats: number;
+  multiplier: number;
+  energy: number;
+  activations: number;
 }
 
 export type KeyboardStageThemeName = "electric" | "aurora" | "sunset";
@@ -83,6 +95,8 @@ export interface KeyboardStageProps {
   theme?: KeyboardStageTheme;
   /** 0 removes ambient motion; 1 is the authored look; values up to 2 add juice. */
   intensity?: number;
+  /** Earned combo-energy state. Power Mode remains controlled by the game engine. */
+  power?: KeyboardStagePowerState;
   /** Number of upcoming beats visible on the highway. */
   travelBeats?: number;
   showHud?: boolean;
@@ -116,8 +130,10 @@ interface NoteVisual {
   group: THREE.Group;
   body: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
   glow: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
+  flare: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
   bodyMaterial: THREE.MeshStandardMaterial;
   glowMaterial: THREE.MeshBasicMaterial;
+  flareMaterial: THREE.MeshBasicMaterial;
 }
 
 interface FeedbackBurst {
@@ -125,7 +141,12 @@ interface FeedbackBurst {
   points: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   velocities: Float32Array;
   ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  echoRing?: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   shockwave?: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  streaks?: THREE.LineSegments<
+    THREE.BufferGeometry,
+    THREE.LineBasicMaterial
+  >;
   fracture?: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   light: THREE.PointLight;
   age: number;
@@ -139,6 +160,17 @@ interface ThemeMaterial {
 }
 
 type StageStyle = CSSProperties & Record<`--kh-${string}`, string | number>;
+
+const DEFAULT_POWER_STATE: KeyboardStagePowerState = {
+  charge: 0,
+  active: false,
+  progress: 0,
+  remainingBeats: 0,
+  durationBeats: 8,
+  multiplier: 1,
+  energy: 0,
+  activations: 0,
+};
 
 const THEME_PRESETS: Record<KeyboardStageThemeName, KeyboardStagePalette> = {
   electric: {
@@ -328,6 +360,7 @@ export default function KeyboardStage({
   feedback = null,
   theme = "electric",
   intensity = 1,
+  power = DEFAULT_POWER_STATE,
   travelBeats = 8,
   showHud = true,
   strikeLabel = "PLAY HERE",
@@ -348,6 +381,7 @@ export default function KeyboardStage({
   const palette = useMemo(() => resolvePalette(theme), [theme]);
   const paletteRef = useRef(palette);
   const intensityRef = useRef(intensity);
+  const powerRef = useRef(power);
   const travelBeatsRef = useRef(travelBeats);
   const onKeyDownRef = useRef(onKeyDown);
   const onKeyUpRef = useRef(onKeyUp);
@@ -364,6 +398,7 @@ export default function KeyboardStage({
     pressedRef.current = pressedMidiNotes;
     paletteRef.current = palette;
     intensityRef.current = intensity;
+    powerRef.current = power;
     travelBeatsRef.current = travelBeats;
     onKeyDownRef.current = onKeyDown;
     onKeyUpRef.current = onKeyUp;
@@ -375,6 +410,7 @@ export default function KeyboardStage({
     pressedMidiNotes,
     palette,
     intensity,
+    power,
     travelBeats,
     onKeyDown,
     onKeyUp,
@@ -431,7 +467,10 @@ export default function KeyboardStage({
     let lastDisplayUpdate = -Infinity;
     let appliedTheme = "";
     let cameraShake = 0;
+    let cameraKick = 0;
     let flashEnergy = 0;
+    let powerSurge = 0;
+    let lastPowerActivation = powerRef.current.activations;
     let viewportWidth = 1;
     let viewportHeight = 1;
     let strikeProjectionDirty = true;
@@ -450,9 +489,8 @@ export default function KeyboardStage({
       Number.POSITIVE_INFINITY,
       Number.POSITIVE_INFINITY,
     );
-    const reduceMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
+    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reduceMotion = motionQuery.matches;
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 80);
     camera.position.set(0, 8.9, 12.1);
@@ -651,6 +689,23 @@ export default function KeyboardStage({
     hitSweep.rotation.x = -Math.PI / 2;
     hitSweep.position.set(-KEYBOARD_WIDTH / 2, 0.125, HIT_Z);
     world.add(hitSweep);
+
+    const powerSurgeMaterial = new THREE.MeshBasicMaterial({
+      color: paletteRef.current.success,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const powerSurgeRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.54, 0.68, 64),
+      powerSurgeMaterial,
+    );
+    powerSurgeRing.rotation.x = -Math.PI / 2;
+    powerSurgeRing.position.set(0, 0.13, HIT_Z - 0.02);
+    powerSurgeRing.visible = false;
+    world.add(powerSurgeRing);
 
     const bodyMaterial = addThemedMaterial(
       new THREE.MeshStandardMaterial({
@@ -862,9 +917,9 @@ export default function KeyboardStage({
       world.add(button);
     });
 
-    const ambientParticleCount = reduceMotion
-      ? 0
-      : Math.round(70 + clamp(intensityRef.current, 0, 2) * 45);
+    const ambientParticleCount = Math.round(
+      70 + clamp(intensityRef.current, 0, 2) * 45,
+    );
     const ambientPositions = new Float32Array(ambientParticleCount * 3);
     for (let index = 0; index < ambientParticleCount; index += 1) {
       ambientPositions[index * 3] = (Math.random() - 0.5) * 13;
@@ -893,6 +948,7 @@ export default function KeyboardStage({
       ambientGeometry,
       ambientParticleMaterial,
     );
+    ambientParticles.visible = !reduceMotion;
     world.add(ambientParticles);
 
     const noteGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -925,17 +981,28 @@ export default function KeyboardStage({
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
+      const flareMaterial = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
       const group = new THREE.Group();
       const glow = new THREE.Mesh(noteGeometry, glowMaterial);
+      const flare = new THREE.Mesh(noteGeometry, flareMaterial);
       const bodyMesh = new THREE.Mesh(noteGeometry, bodyMaterialForNote);
-      group.add(glow, bodyMesh);
+      group.add(flare, glow, bodyMesh);
       world.add(group);
       const visual: NoteVisual = {
         group,
         body: bodyMesh,
         glow,
+        flare,
         bodyMaterial: bodyMaterialForNote,
         glowMaterial,
+        flareMaterial,
       };
       noteVisuals.set(note.id, visual);
       return visual;
@@ -947,6 +1014,7 @@ export default function KeyboardStage({
       world.remove(visual.group);
       visual.bodyMaterial.dispose();
       visual.glowMaterial.dispose();
+      visual.flareMaterial.dispose();
       noteVisuals.delete(id);
     };
 
@@ -955,11 +1023,17 @@ export default function KeyboardStage({
       if (!key) return;
       const miss = event.kind === "miss";
       const gradeBoost =
-        event.kind === "perfect" ? 1.28 : event.kind === "great" ? 1.08 : 0.86;
+        event.kind === "perfect" ? 1.46 : event.kind === "great" ? 1.2 : 0.96;
+      const powerBoost = powerRef.current.active
+        ? 1 + clamp(powerRef.current.energy, 0, 1) * 0.38
+        : 1;
       const eventIntensity = clamp(
-        (event.strength ?? 1) * (miss ? 0.75 : gradeBoost),
+        (event.strength ?? 1) *
+          (miss ? 0.75 : gradeBoost) *
+          powerBoost *
+          (event.powerActivation ? 1.2 : 1),
         0.25,
-        1.8,
+        2.2,
       );
       const keyIndex = event.midi - FIRST_MIDI_NOTE;
       const color = feedbackColor(event, paletteRef.current);
@@ -990,6 +1064,27 @@ export default function KeyboardStage({
       ring.rotation.x = -Math.PI / 2;
       rootGroup.add(ring);
 
+      let echoRing:
+        | THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>
+        | undefined;
+      if (!miss) {
+        const echoRingMaterial = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.78,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        echoRing = new THREE.Mesh(
+          new THREE.RingGeometry(0.29, 0.35, 44),
+          echoRingMaterial,
+        );
+        echoRing.rotation.x = -Math.PI / 2;
+        echoRing.position.y = 0.018;
+        rootGroup.add(echoRing);
+      }
+
       let shockwave:
         | THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>
         | undefined;
@@ -1009,6 +1104,57 @@ export default function KeyboardStage({
         shockwave.rotation.x = -Math.PI / 2;
         shockwave.position.y = -0.04;
         rootGroup.add(shockwave);
+      }
+
+      let streaks:
+        | THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>
+        | undefined;
+      if (!miss && !reduceMotion) {
+        const streakCount = Math.round(
+          (event.kind === "perfect" ? 20 : 13) * eventIntensity,
+        );
+        const streakPositions = new Float32Array(streakCount * 6);
+        const streakColors = new Float32Array(streakCount * 6);
+        const streakPalette = [
+          new THREE.Color(color),
+          new THREE.Color(0xffffff),
+          new THREE.Color(paletteRef.current.secondary),
+          new THREE.Color(paletteRef.current.success),
+          new THREE.Color(laneColor(event.midi + 1)),
+        ];
+        for (let index = 0; index < streakCount; index += 1) {
+          const offset = index * 6;
+          const angle = Math.random() * Math.PI * 2;
+          const inner = 0.05 + Math.random() * 0.12;
+          const outer = 0.42 + Math.random() * 1.18 * eventIntensity;
+          streakPositions[offset] = Math.cos(angle) * inner;
+          streakPositions[offset + 1] = Math.random() * 0.14;
+          streakPositions[offset + 2] = Math.sin(angle) * inner;
+          streakPositions[offset + 3] = Math.cos(angle) * outer;
+          streakPositions[offset + 4] = 0.12 + Math.random() * 0.62;
+          streakPositions[offset + 5] = Math.sin(angle) * outer;
+          const streakColor = streakPalette[index % streakPalette.length];
+          streakColor.toArray(streakColors, offset);
+          streakColor.toArray(streakColors, offset + 3);
+        }
+        const streakGeometry = new THREE.BufferGeometry();
+        streakGeometry.setAttribute(
+          "position",
+          new THREE.BufferAttribute(streakPositions, 3),
+        );
+        streakGeometry.setAttribute(
+          "color",
+          new THREE.BufferAttribute(streakColors, 3),
+        );
+        const streakMaterial = new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.92,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        streaks = new THREE.LineSegments(streakGeometry, streakMaterial);
+        rootGroup.add(streaks);
       }
 
       let fracture:
@@ -1049,9 +1195,23 @@ export default function KeyboardStage({
 
       const particleCount = reduceMotion
         ? 0
-        : Math.round((miss ? 15 : 48) * eventIntensity);
+        : Math.round(
+            (miss ? 18 : event.kind === "perfect" ? 92 : 68) *
+              eventIntensity,
+          );
       const positions = new Float32Array(particleCount * 3);
       const velocities = new Float32Array(particleCount * 3);
+      const particleColors = new Float32Array(particleCount * 3);
+      const sparkPalette = miss
+        ? [new THREE.Color(color), new THREE.Color(0xffb0c2)]
+        : [
+            new THREE.Color(color),
+            new THREE.Color(0xffffff),
+            new THREE.Color(paletteRef.current.secondary),
+            new THREE.Color(paletteRef.current.success),
+            new THREE.Color(laneColor(event.midi - 1)),
+            new THREE.Color(laneColor(event.midi + 1)),
+          ];
       for (let index = 0; index < particleCount; index += 1) {
         const angle = Math.random() * Math.PI * 2;
         const horizontal = miss
@@ -1065,12 +1225,21 @@ export default function KeyboardStage({
           ? 0.15 + Math.random() * 0.85
           : 1.5 + Math.random() * 4.2;
         velocities[index * 3 + 2] = Math.sin(angle) * horizontal;
+        sparkPalette[index % sparkPalette.length].toArray(
+          particleColors,
+          index * 3,
+        );
       }
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute(
+        "color",
+        new THREE.BufferAttribute(particleColors, 3),
+      );
       const material = new THREE.PointsMaterial({
-        color,
-        size: miss ? 0.17 : 0.105,
+        color: 0xffffff,
+        vertexColors: true,
+        size: miss ? 0.17 : event.kind === "perfect" ? 0.125 : 0.11,
         transparent: true,
         opacity: miss ? 0.58 : 1,
         blending: miss ? THREE.NormalBlending : THREE.AdditiveBlending,
@@ -1093,18 +1262,25 @@ export default function KeyboardStage({
         points,
         velocities,
         ring,
+        echoRing,
         shockwave,
+        streaks,
         fracture,
         light: burstLight,
         age: 0,
         duration: reduceMotion ? 0.38 : miss ? 0.56 : 1.16,
         miss,
       });
-      cameraShake = Math.max(
-        cameraShake,
-        (miss ? 0.035 : 0.11) * eventIntensity,
-      );
+      if (!reduceMotion) {
+        cameraShake = Math.max(
+          cameraShake,
+          (miss ? 0.035 : event.kind === "perfect" ? 0.145 : 0.11) *
+            eventIntensity,
+        );
+        if (!miss) cameraKick = Math.max(cameraKick, eventIntensity * 0.18);
+      }
       flashEnergy = Math.max(flashEnergy, miss ? 0.22 : eventIntensity * 1.3);
+      if (event.powerActivation && !reduceMotion) powerSurge = 1;
     };
 
     const drawDisplay = () => {
@@ -1194,6 +1370,32 @@ export default function KeyboardStage({
       camera.position.y = width < 620 ? 9.5 : 8.9;
       camera.lookAt(0, 0.1, -2.1);
       camera.updateProjectionMatrix();
+    };
+
+    const handleMotionPreferenceChange = (event: MediaQueryListEvent) => {
+      reduceMotion = event.matches;
+      ambientParticles.visible = !reduceMotion;
+      if (!reduceMotion) return;
+
+      cameraShake = 0;
+      cameraKick = 0;
+      powerSurge = 0;
+      powerSurgeRing.visible = false;
+      powerSurgeMaterial.opacity = 0;
+      hitSweep.position.x = 0;
+      hitSweepMaterial.opacity = 0.1;
+      feedbackBursts.forEach((burst) => {
+        burst.points.visible = false;
+        if (burst.shockwave) burst.shockwave.visible = false;
+        if (burst.streaks) burst.streaks.visible = false;
+        if (burst.fracture) burst.fracture.visible = false;
+      });
+
+      const baseCameraZ =
+        viewportWidth < 620 ? 13.8 : viewportWidth < 900 ? 12.8 : 12.1;
+      camera.position.set(0, viewportWidth < 620 ? 9.5 : 8.9, baseCameraZ);
+      camera.lookAt(0, 0.1, -2.1);
+      strikeProjectionDirty = true;
     };
 
     const updateStrikeZoneProjection = () => {
@@ -1312,6 +1514,7 @@ export default function KeyboardStage({
     canvas.addEventListener("pointercancel", handlePointerUp);
     canvas.addEventListener("contextmenu", preventContextMenu);
     canvas.addEventListener("webglcontextlost", handleContextLoss);
+    motionQuery.addEventListener("change", handleMotionPreferenceChange);
 
     if (typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver(resize);
@@ -1331,6 +1534,33 @@ export default function KeyboardStage({
       const beatFraction = ((beat % 1) + 1) % 1;
       const visibleBeats = Math.max(1, travelBeatsRef.current);
       const pressedByPointer = new Set(pointerNotes.values());
+      const powerState = powerRef.current;
+      const powerEnergy = powerState.active
+        ? clamp(powerState.energy, 0, 1)
+        : 0;
+      const powerPulse = powerState.active
+        ? reduceMotion
+          ? 0.72
+          : 0.76 + Math.sin(now * 0.0032) * 0.16
+        : 0;
+
+      if (powerState.activations !== lastPowerActivation) {
+        const activated = powerState.activations > lastPowerActivation;
+        lastPowerActivation = powerState.activations;
+        if (activated) {
+          flashEnergy = Math.max(flashEnergy, 2.4);
+          if (!reduceMotion) {
+            powerSurge = 1;
+            cameraShake = Math.max(cameraShake, 0.22);
+            cameraKick = Math.max(cameraKick, 0.72);
+          } else {
+            powerSurge = 0;
+          }
+          for (let index = 0; index < successFlare.length; index += 1) {
+            successFlare[index] = Math.max(successFlare[index], 0.34);
+          }
+        }
+      }
 
       applyTheme();
 
@@ -1395,6 +1625,9 @@ export default function KeyboardStage({
         const missed = note.state === "missed";
         const renderedColor = missed ? paletteRef.current.miss : color;
         const motionFlare = reduceMotion ? 0 : successEnergy;
+        const powerNoteBoost = missed
+          ? 0
+          : powerEnergy * (0.74 + powerPulse * 0.26);
 
         visual.group.position.set(
           key.x,
@@ -1405,28 +1638,53 @@ export default function KeyboardStage({
           noteWidth,
           (0.12 + velocity * 0.11) *
             hitBoost *
-            (1 + motionFlare * 0.3 + (sustaining ? 0.12 : 0)),
+            (1 +
+              motionFlare * 0.3 +
+              (sustaining ? 0.12 : 0) +
+              powerNoteBoost * 0.08),
           length,
         );
         visual.glow.scale.set(
-          noteWidth * (1.45 + motionFlare * 0.7),
-          0.36 + motionFlare * 0.16,
+          noteWidth * (1.45 + motionFlare * 0.7 + powerNoteBoost * 0.32),
+          0.36 + motionFlare * 0.16 + powerNoteBoost * 0.08,
           length + 0.22 + (sustaining ? 0.32 : 0),
+        );
+        visual.flare.scale.set(
+          noteWidth *
+            (1.7 +
+              motionFlare * 0.88 +
+              (sustaining ? 0.46 : 0) +
+              powerNoteBoost * 0.48),
+          0.45 + motionFlare * 0.18 + powerNoteBoost * 0.12,
+          length +
+            0.42 +
+            (sustaining ? 0.72 : 0) +
+            powerNoteBoost * 0.24,
         );
         visual.bodyMaterial.color.set(renderedColor);
         visual.bodyMaterial.emissive.set(renderedColor);
         visual.bodyMaterial.emissiveIntensity =
           (missed ? 0.8 : 2.25 + velocity * 1.1) * hitBoost +
           successEnergy * 9 +
-          (sustaining ? 3.2 : 0);
+          (sustaining ? 3.2 : 0) +
+          powerNoteBoost * 4.2;
         visual.bodyMaterial.opacity = missed ? 0.46 : 0.96;
         visual.glowMaterial.color.set(renderedColor);
         visual.glowMaterial.opacity = clamp(
           (missed ? 0.06 : 0.14 + activeIntensity * 0.05) * hitBoost +
             successEnergy * 0.48 +
-            (sustaining ? 0.24 : 0),
+            (sustaining ? 0.24 : 0) +
+            powerNoteBoost * 0.12,
           0.04,
           0.92,
+        );
+        visual.flareMaterial.color.set(renderedColor);
+        visual.flareMaterial.opacity = clamp(
+          (sustaining ? 0.2 : 0) +
+            successEnergy * 0.34 +
+            powerNoteBoost * 0.1,
+          0,
+          0.66,
         );
       });
 
@@ -1455,7 +1713,8 @@ export default function KeyboardStage({
           ((active ? 3.1 + activeIntensity : key.isBlack ? 0.08 : 0.025) +
             hitEnergy * 10 +
             missedEnergy * 2.8 +
-            (sustaining ? 3.4 : 0) -
+            (sustaining ? 3.4 : 0) +
+            powerEnergy * (1.15 + powerPulse * 0.9) -
             key.material.emissiveIntensity) *
           0.3;
         key.landingMaterial.color.set(
@@ -1467,6 +1726,7 @@ export default function KeyboardStage({
             hitEnergy * 0.96,
             missedEnergy * 0.62,
             sustaining ? 0.48 : 0,
+            powerEnergy * (0.07 + powerPulse * 0.05),
           ) -
             key.landingMaterial.opacity) *
           0.3;
@@ -1482,10 +1742,11 @@ export default function KeyboardStage({
           (baseLaneOpacity +
             hitEnergy * 0.42 +
             missedEnergy * 0.25 +
-            (sustaining ? 0.12 : 0) -
+            (sustaining ? 0.12 : 0) +
+            powerEnergy * (0.045 + powerPulse * 0.035) -
             key.laneMaterial.opacity) *
           0.28;
-        if (active || hitEnergy > 0.08 || sustaining) {
+        if (!reduceMotion && (active || hitEnergy > 0.08 || sustaining)) {
           key.landingMaterial.opacity *=
             0.86 + Math.sin(now * 0.012 + index) * 0.14;
         }
@@ -1497,17 +1758,29 @@ export default function KeyboardStage({
         const burst = feedbackBursts[index];
         burst.age += deltaSeconds;
         const progress = burst.age / burst.duration;
+        burst.points.visible = !reduceMotion;
+        if (burst.shockwave) burst.shockwave.visible = !reduceMotion;
+        if (burst.streaks) burst.streaks.visible = !reduceMotion;
+        if (burst.fracture) burst.fracture.visible = !reduceMotion;
         const positions = burst.points.geometry.attributes.position
           .array as Float32Array;
-        for (let particle = 0; particle < positions.length / 3; particle += 1) {
-          const offset = particle * 3;
-          burst.velocities[offset + 1] -=
-            (burst.miss ? 0.75 : 5.2) * deltaSeconds;
-          positions[offset] += burst.velocities[offset] * deltaSeconds;
-          positions[offset + 1] += burst.velocities[offset + 1] * deltaSeconds;
-          positions[offset + 2] += burst.velocities[offset + 2] * deltaSeconds;
+        if (!reduceMotion) {
+          for (
+            let particle = 0;
+            particle < positions.length / 3;
+            particle += 1
+          ) {
+            const offset = particle * 3;
+            burst.velocities[offset + 1] -=
+              (burst.miss ? 0.75 : 5.2) * deltaSeconds;
+            positions[offset] += burst.velocities[offset] * deltaSeconds;
+            positions[offset + 1] +=
+              burst.velocities[offset + 1] * deltaSeconds;
+            positions[offset + 2] +=
+              burst.velocities[offset + 2] * deltaSeconds;
+          }
+          burst.points.geometry.attributes.position.needsUpdate = true;
         }
-        burst.points.geometry.attributes.position.needsUpdate = true;
         burst.points.material.opacity = Math.max(
           0,
           (burst.miss ? 0.58 : 1) * (1 - progress * progress),
@@ -1519,6 +1792,15 @@ export default function KeyboardStage({
         burst.ring.scale.setScalar(
           reduceMotion ? 1 : 1 + progress * (burst.miss ? 1.7 : 4.6),
         );
+        if (burst.echoRing) {
+          burst.echoRing.scale.setScalar(
+            reduceMotion ? 1.3 : 1.2 + progress * 6.2,
+          );
+          burst.echoRing.material.opacity = Math.max(
+            0,
+            0.78 * (1 - progress * 1.16),
+          );
+        }
         if (burst.shockwave && !reduceMotion) {
           burst.shockwave.scale.setScalar(1 + progress * 7.2);
           burst.shockwave.material.opacity = Math.max(
@@ -1533,6 +1815,13 @@ export default function KeyboardStage({
             0.95 * (1 - progress * 1.35),
           );
         }
+        if (burst.streaks && !reduceMotion) {
+          burst.streaks.scale.setScalar(1 + progress * 0.42);
+          burst.streaks.material.opacity = Math.max(
+            0,
+            0.92 * (1 - progress) * (1 - progress),
+          );
+        }
         burst.light.intensity *= Math.pow(0.002, deltaSeconds);
 
         if (progress >= 1) {
@@ -1543,29 +1832,53 @@ export default function KeyboardStage({
         }
       }
 
-      const ambientPositionAttribute = ambientGeometry.attributes.position;
-      const ambientArray = ambientPositionAttribute.array as Float32Array;
-      for (let index = 0; index < ambientParticleCount; index += 1) {
-        const zIndex = index * 3 + 2;
-        ambientArray[zIndex] += deltaSeconds * (0.28 + activeIntensity * 0.32);
-        if (ambientArray[zIndex] > 5.2) ambientArray[zIndex] = FAR_Z;
+      if (!reduceMotion) {
+        const ambientPositionAttribute = ambientGeometry.attributes.position;
+        const ambientArray = ambientPositionAttribute.array as Float32Array;
+        for (let index = 0; index < ambientParticleCount; index += 1) {
+          const zIndex = index * 3 + 2;
+          ambientArray[zIndex] +=
+            deltaSeconds *
+            (0.28 + activeIntensity * 0.32 + powerEnergy * 0.58);
+          if (ambientArray[zIndex] > 5.2) ambientArray[zIndex] = FAR_Z;
+        }
+        ambientPositionAttribute.needsUpdate = true;
       }
-      ambientPositionAttribute.needsUpdate = true;
-      ambientParticleMaterial.opacity = 0.24 + activeIntensity * 0.25;
+      ambientParticleMaterial.opacity = clamp(
+        0.24 + activeIntensity * 0.25 + powerEnergy * 0.16,
+        0,
+        0.92,
+      );
 
       padMaterials.forEach((material, index) => {
         material.emissiveIntensity =
           0.35 +
           activeIntensity * 0.25 +
-          Math.max(0, Math.sin(now * 0.0026 + index * 0.7)) * 0.42;
+          (reduceMotion
+            ? 0.18
+            : Math.max(0, Math.sin(now * 0.0026 + index * 0.7)) * 0.42) +
+          powerEnergy * (0.34 + powerPulse * 0.18);
       });
 
       const beatPulse = Math.pow(1 - beatFraction, 5);
+      beatLineMaterial.opacity =
+        0.2 + powerEnergy * (0.1 + powerPulse * 0.08);
+      hitMaterial.color.set(
+        powerState.active
+          ? paletteRef.current.success
+          : paletteRef.current.primary,
+      );
+      hitMaterial.emissive.copy(hitMaterial.color);
       hitMaterial.emissiveIntensity =
-        3.8 + beatPulse * (1.8 + activeIntensity * 0.55);
+        3.8 +
+        beatPulse * (1.8 + activeIntensity * 0.55) +
+        powerEnergy * (2.1 + powerPulse * 1.35);
       hitHaloMaterial.opacity =
-        0.13 + beatPulse * 0.11 + Math.min(0.12, flashEnergy * 0.05);
-      hitHalo.scale.y = 1 + beatPulse * 0.16;
+        0.13 +
+        beatPulse * 0.11 +
+        Math.min(0.12, flashEnergy * 0.05) +
+        powerEnergy * 0.08;
+      hitHalo.scale.y = 1 + beatPulse * 0.16 + powerEnergy * 0.08;
       hitLine.scale.z = 1 + beatPulse * 0.18;
       if (reduceMotion) {
         hitSweep.position.x = 0;
@@ -1578,20 +1891,50 @@ export default function KeyboardStage({
         hitSweepMaterial.opacity =
           0.12 + Math.sin(sweepProgress * Math.PI) * 0.2;
       }
-      primaryLight.intensity = 9 + activeIntensity * 4 + flashEnergy * 11;
-      secondaryLight.intensity = 8 + activeIntensity * 3;
+      if (reduceMotion) {
+        powerSurgeRing.visible = powerState.active;
+        powerSurgeRing.scale.setScalar(7.5);
+        powerSurgeMaterial.opacity = powerState.active ? 0.1 : 0;
+      } else if (powerSurge > 0.008) {
+        const surgeProgress = 1 - powerSurge;
+        powerSurgeRing.visible = true;
+        powerSurgeRing.scale.setScalar(1 + surgeProgress * 10.5);
+        powerSurgeMaterial.opacity = 0.88 * powerSurge * powerSurge;
+        powerSurge *= Math.pow(0.045, deltaSeconds);
+      } else {
+        powerSurgeRing.visible = false;
+        powerSurgeMaterial.opacity = 0;
+      }
+      powerSurgeMaterial.color.set(paletteRef.current.success);
+
+      primaryLight.intensity =
+        9 +
+        activeIntensity * 4 +
+        flashEnergy * 11 +
+        powerEnergy * (5.5 + powerPulse * 2.5);
+      secondaryLight.intensity =
+        8 + activeIntensity * 3 + powerEnergy * (3.2 + powerPulse * 1.8);
+      renderer.toneMappingExposure =
+        1.16 + powerEnergy * 0.1 + Math.min(0.08, flashEnergy * 0.018);
       flashEnergy *= Math.pow(0.015, deltaSeconds);
 
       if (!reduceMotion) {
+        const baseCameraZ =
+          viewportWidth < 620 ? 13.8 : viewportWidth < 900 ? 12.8 : 12.1;
         camera.position.x = Math.sin(now * 0.00042) * 0.08 * activeIntensity;
         camera.position.y =
           (viewportWidth < 620 ? 9.5 : 8.9) +
           Math.sin(now * 0.00031) * 0.035 * activeIntensity;
+        camera.position.z =
+          baseCameraZ -
+          cameraKick * 0.26 -
+          powerEnergy * (0.025 + powerPulse * 0.025);
         if (cameraShake > 0.001) {
           camera.position.x += (Math.random() - 0.5) * cameraShake;
           camera.position.y += (Math.random() - 0.5) * cameraShake;
           cameraShake *= Math.pow(0.02, deltaSeconds);
         }
+        cameraKick *= Math.pow(0.035, deltaSeconds);
         camera.lookAt(0, 0.1, -2.1);
       }
 
@@ -1626,6 +1969,7 @@ export default function KeyboardStage({
       canvas.removeEventListener("pointercancel", handlePointerUp);
       canvas.removeEventListener("contextmenu", preventContextMenu);
       canvas.removeEventListener("webglcontextlost", handleContextLoss);
+      motionQuery.removeEventListener("change", handleMotionPreferenceChange);
       pointerNotes.forEach((midi) => onKeyUpRef.current?.(midi));
       disposeObject(scene);
       noteGeometry.dispose();
@@ -1643,6 +1987,7 @@ export default function KeyboardStage({
     "--kh-success": palette.success,
     "--kh-miss": palette.miss,
     "--kh-background": palette.background,
+    "--kh-power-energy": clamp(power.energy, 0, 1),
     ...style,
   };
   const activeNotes = notes.reduce(
@@ -1658,9 +2003,10 @@ export default function KeyboardStage({
   return (
     <div
       ref={rootRef}
-      className={`kh-stage ${className}`.trim()}
+      className={`kh-stage${power.active ? " kh-stage--power" : ""} ${className}`.trim()}
       style={rootStyle}
       aria-busy={!ready && !webglError}
+      data-power-mode={power.active ? "active" : "charging"}
     >
       <canvas
         ref={canvasRef}
@@ -1670,6 +2016,7 @@ export default function KeyboardStage({
       />
 
       <div className="kh-stage__atmosphere" aria-hidden="true" />
+      <div className="kh-stage__power-wash" aria-hidden="true" />
       <div className="kh-stage__scanlines" aria-hidden="true" />
 
       {!webglError && (

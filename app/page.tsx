@@ -32,7 +32,7 @@ import KeyboardStage, {
 import PerformanceResults from "@/components/PerformanceResults";
 import {
   useKeyboardHeroCore,
-  type NoteResult,
+  type NoteFeedback,
 } from "@/hooks/useKeyboardHeroCore";
 import {
   SONGS,
@@ -101,10 +101,19 @@ interface CelebrationCopy {
 }
 
 function performanceCelebration(
-  feedback: NoteResult | null,
+  feedback: NoteFeedback | null,
   combo: number,
 ): CelebrationCopy | null {
   if (!feedback) return null;
+  if (feedback.powerActivation) {
+    return {
+      eyebrow: "Combo energy maxed // 2× score",
+      headline: "Power mode!",
+      detail: "You earned the spotlight. Keep every note clean.",
+      tone: "rockstar",
+      variant: "milestone",
+    };
+  }
   const offset = Math.round(Math.abs(feedback.offsetMs));
   const timingDirection =
     offset <= 8 ? "Dead center" : `${offset}ms ${feedback.offsetMs < 0 ? "early" : "late"}`;
@@ -342,22 +351,26 @@ export default function Home() {
   const progress = Math.min(100, (hero.positionBeat / song.durationBeats) * 100);
   const loopStart = Math.min(100, (hero.loop.startBeat / song.durationBeats) * 100);
   const loopEnd = Math.min(100, (hero.loop.endBeat / song.durationBeats) * 100);
-  const celebration = performanceCelebration(
-    hero.latestFeedback,
-    hero.score.combo,
-  );
-  const feedbackKey = hero.latestFeedback
-    ? `${hero.latestFeedback.id}-${hero.score.hits}-${hero.score.misses}`
+  const latestFeedbackGroup = useMemo(() => {
+    const latestGroupId = hero.latestFeedback?.groupId;
+    if (!latestGroupId) return [];
+    return hero.feedbackEvents.filter(
+      (event) => event.groupId === latestGroupId,
+    );
+  }, [hero.feedbackEvents, hero.latestFeedback?.groupId]);
+  const hudFeedback =
+    latestFeedbackGroup.find((event) => event.powerActivation) ??
+    hero.latestFeedback;
+  const celebration = performanceCelebration(hudFeedback, hero.score.combo);
+  const feedbackKey = hudFeedback
+    ? `${hudFeedback.groupId}-${latestFeedbackGroup.length}-${hero.score.hits}-${hero.score.misses}`
     : "ready";
-  const scoreDelta = hero.latestFeedback
-    ? hero.latestFeedback.grade === "perfect"
-      ? 1000 + Math.min(500, hero.score.combo * 10)
-      : hero.latestFeedback.grade === "great"
-        ? 700 + Math.min(500, hero.score.combo * 10)
-        : hero.latestFeedback.grade === "good"
-          ? 450 + Math.min(500, hero.score.combo * 10)
-          : 0
-    : 0;
+  const scoreDelta = latestFeedbackGroup.length
+    ? latestFeedbackGroup.reduce(
+        (total, event) => total + event.pointsAwarded,
+        0,
+      )
+    : (hero.latestFeedback?.pointsAwarded ?? 0);
   const streakTier =
     hero.score.combo >= 25
       ? "rockstar"
@@ -368,7 +381,17 @@ export default function Home() {
           : hero.score.combo >= 4
             ? "building"
             : "base";
-  const streakProgress = Math.min(100, (hero.score.combo / 25) * 100);
+  const powerChargePercent = Math.round(hero.power.charge * 100);
+  const powerRemainingPercent = Math.round(
+    (hero.power.remainingBeats / Math.max(0.001, hero.power.durationBeats)) *
+      100,
+  );
+  const powerMeterPercent = hero.power.active
+    ? powerRemainingPercent
+    : powerChargePercent;
+  const powerMeterValueText = hero.power.active
+    ? `Power Mode active, ${hero.power.remainingBeats.toFixed(1)} beats remaining at ${hero.power.multiplier} times score`
+    : `${powerChargePercent} percent charged from correct notes`;
   const hasMIDIActivity =
     hero.midi.connectedName !== null &&
     typeof hero.midi.lastNote === "number" &&
@@ -489,6 +512,7 @@ export default function Home() {
         midi: event.midi,
         kind: event.grade,
         strength: Math.max(0.45, 1 - Math.abs(event.offsetMs) / 280),
+        powerActivation: event.powerActivation,
       })),
     [hero.feedbackEvents],
   );
@@ -578,18 +602,24 @@ export default function Home() {
               hero.countdown !== null && hero.countdown > 0
                 ? " is-counting-in"
                 : ""
-            }${isFinishing ? " is-finishing" : ""}`}
+            }${isFinishing ? " is-finishing" : ""}${
+              hero.power.active ? " is-power-mode" : ""
+            }`}
           >
             <KeyboardStage
               ariaLabel="Three-dimensional 25-key practice keyboard and falling note highway"
               currentBeat={hero.visualBeat}
               currentTime={hero.positionSeconds}
               feedback={stageFeedback}
-              intensity={Math.min(1.75, 0.85 + hero.score.combo / 28)}
+              intensity={Math.min(
+                2,
+                0.85 + hero.score.combo / 28 + hero.power.energy * 0.22,
+              )}
               notes={stageNotes}
               onKeyDown={(midi, velocity) => hero.noteOn(midi, velocity, "stage")}
               onKeyUp={(midi) => hero.noteOff(midi, "stage")}
               pressedMidiNotes={hero.pressedNotes}
+              power={hero.power}
               showHud={false}
               theme="electric"
               travelBeats={noteApproachBeats}
@@ -608,8 +638,10 @@ export default function Home() {
             </div>
 
             <section
-              className={`performance-hud tier-${streakTier}`}
-              aria-label={`Live performance: ${hero.score.points} points, ${hero.score.combo} note streak, ${hero.score.accuracy.toFixed(0)} percent accuracy`}
+              className={`performance-hud tier-${streakTier}${
+                hero.power.active ? " is-power-mode" : ""
+              }`}
+              aria-label={`Live performance: ${hero.score.points} points, ${hero.score.combo} note streak, ${hero.score.accuracy.toFixed(0)} percent accuracy. ${powerMeterValueText}.`}
             >
               <div className="performance-card performance-score">
                 <span className="performance-label">Stage score</span>
@@ -629,6 +661,55 @@ export default function Home() {
                 <span className="performance-subline">
                   {hero.score.hits} notes landed
                 </span>
+              </div>
+
+              <div
+                className={`power-meter${
+                  hero.power.active ? " is-active" : ""
+                }`}
+                data-activation={hero.power.activations}
+              >
+                <div className="power-meter-head">
+                  <span>
+                    {hero.power.active ? "Power Mode" : "Combo energy"}
+                  </span>
+                  <strong>
+                    {hero.power.active
+                      ? `${hero.power.multiplier}× score`
+                      : `${powerChargePercent}%`}
+                  </strong>
+                </div>
+                <span
+                  aria-label="Power Mode meter"
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={Math.max(0, Math.min(100, powerMeterPercent))}
+                  aria-valuetext={powerMeterValueText}
+                  className="power-meter-track"
+                  role="progressbar"
+                >
+                  <i style={{ width: `${powerMeterPercent}%` }} />
+                  <b aria-hidden="true" />
+                </span>
+                <div className="power-meter-foot">
+                  <span>
+                    {hero.power.active
+                      ? "You earned the spotlight — stay clean"
+                      : "Correct hits fill the meter"}
+                  </span>
+                  <strong
+                    aria-label={
+                      hero.power.active
+                        ? `${hero.power.remainingBeats.toFixed(1)} beats remaining`
+                        : `${hero.score.combo} hit streak`
+                    }
+                    role={hero.power.active ? "timer" : undefined}
+                  >
+                    {hero.power.active
+                      ? `${hero.power.remainingBeats.toFixed(1)} beats`
+                      : `${hero.score.combo}× streak`}
+                  </strong>
+                </div>
               </div>
 
               <div className="performance-card performance-streak">
@@ -655,11 +736,20 @@ export default function Home() {
                     <i style={{ width: `${Math.min(100, hero.score.accuracy)}%` }} />
                   </span>
                 </div>
-                <span className="streak-charge" aria-hidden="true">
-                  <i style={{ width: `${streakProgress}%` }} />
-                </span>
               </div>
             </section>
+
+            {hero.power.active && (
+              <p
+                className="sr-only"
+                key={`power-${hero.power.activations}`}
+                role="status"
+                aria-live="assertive"
+              >
+                Power Mode activated. Double score for {hero.power.durationBeats}
+                beats. Keep the streak alive.
+              </p>
+            )}
 
             {celebration &&
               !songComplete &&

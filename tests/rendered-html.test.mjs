@@ -46,14 +46,18 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /PLAY HERE/);
   assert.match(html, /Stage score/);
   assert.match(html, /Live streak/);
+  assert.match(html, /Combo energy/);
+  assert.match(html, /Correct hits fill the meter/);
+  assert.match(html, /Power Mode meter/);
   assert.match(html, /Accuracy/);
   assert.match(html, /Learn the notes\. Feel the stage\./);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
 test("ships the finished game rather than starter assets", async () => {
-  const [page, layout, packageJson, songs, stage, stageCss, results, report, engine] = await Promise.all([
+  const [page, appCss, layout, packageJson, songs, stage, stageCss, results, report, engine] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../lib/songs.ts", import.meta.url), "utf8"),
@@ -92,6 +96,19 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /Mute player piano/);
   assert.match(page, /Your keys are muted/);
   assert.match(page, /showMutedPlayerPianoCue/);
+  assert.match(page, /hero\.power\.active/);
+  assert.match(page, /power=\{hero\.power\}/);
+  assert.match(page, /pointsAwarded/);
+  assert.match(page, /powerActivation/);
+  assert.match(page, /latestFeedbackGroup/);
+  assert.match(page, /event\.groupId === latestGroupId/);
+  assert.match(page, /find\(\(event\) => event\.powerActivation\)/);
+  assert.match(page, /total \+ event\.pointsAwarded/);
+  assert.match(page, /Power Mode activated/);
+  assert.match(page, /power-meter-track/);
+  assert.match(appCss, /\.power-meter\.is-active/);
+  assert.match(appCss, /power-stage-breathe/);
+  assert.match(appCss, /prefers-reduced-motion: reduce/);
   assert.match(page, /Rockstar!/);
   assert.match(page, /result\.grade === "miss"/);
   assert.match(page, /\["flow", "wait", "listen"\]/);
@@ -108,7 +125,16 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /const HIT_BAR_WIDTH = KEYBOARD_WIDTH \+ 0\.42/);
   assert.match(stage, /BoxGeometry\(HIT_BAR_WIDTH, 0\.055, 0\.055\)/);
   assert.match(stage, /shockwave/);
+  assert.match(stage, /KeyboardStagePowerState/);
+  assert.match(stage, /powerSurgeRing/);
+  assert.match(stage, /flareMaterial/);
+  assert.match(stage, /vertexColors: true/);
+  assert.match(stage, /data-power-mode/);
+  assert.match(stage, /motionQuery\.addEventListener\("change"/);
+  assert.match(stage, /motionQuery\.removeEventListener\("change"/);
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
+  assert.match(stageCss, /\.kh-stage--power/);
+  assert.match(stageCss, /kh-stage-power-breathe/);
   assert.match(results, /Official score sheet/);
   assert.match(results, /performance-results-overlay/);
   assert.match(results, /results-test-score/);
@@ -138,6 +164,10 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /feedbackEvents/);
   assert.match(engine, /songComplete/);
   assert.match(engine, /visualBeat/);
+  assert.match(engine, /NoteFeedback/);
+  assert.match(engine, /pointsAwarded/);
+  assert.match(engine, /powerActivation/);
+  assert.match(engine, /groupId/);
   assert.match(engine, /practiceMode === "listen" && !isPlayingRef\.current\) play\(\)/);
   assert.match(engine, /reconcileScheduledVoices/);
   assert.match(engine, /tempoScale: clamp\(scale, 0\.25, 1\.25\)/);

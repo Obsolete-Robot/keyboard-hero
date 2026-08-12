@@ -7,6 +7,13 @@
  */
 
 import { deriveHarmonyAtBeat } from "@/lib/accompaniment";
+import {
+  createPowerSaturationCurve,
+  derivePowerModeProfile,
+  powerAccompanimentIntensity,
+  shapePowerVelocity,
+  type PowerModeProfile,
+} from "@/lib/audioPower";
 import { scheduleAudioSourceWindow } from "@/lib/audioScheduling";
 import type { Song } from "@/lib/songs";
 
@@ -23,6 +30,10 @@ export interface AccompanimentStep {
   tonicMidi: number;
   /** Normalized arrangement density. */
   intensity: number;
+  /** Optional normalized POWER MODE energy for this musical step. */
+  power?: number;
+  /** Current harmony voicing, used for POWER rhythm reinforcement. */
+  harmonyPitches?: readonly number[];
 }
 
 export interface AccompanimentSyncOptions {
@@ -43,6 +54,8 @@ type WebkitAudioWindow = Window & {
 
 interface SynthVoice {
   gain: GainNode;
+  panner: StereoPannerNode;
+  basePan: number;
   oscillators: OscillatorNode[];
   transients: AudioScheduledSourceNode[];
   nodes: AudioNode[];
@@ -60,6 +73,10 @@ export class KeyboardSynth {
   private master: GainNode | null = null;
   private instrument: GainNode | null = null;
   private accompaniment: GainNode | null = null;
+  private instrumentSend: GainNode | null = null;
+  private accompanimentSend: GainNode | null = null;
+  private powerInstrumentSend: GainNode | null = null;
+  private powerAccompanimentSend: GainNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
   private reverb: ConvolverNode | null = null;
   private reverbWet: GainNode | null = null;
@@ -72,6 +89,7 @@ export class KeyboardSynth {
   private accompanimentVolume = 0.58;
   private muted = false;
   private waveform: SynthWaveform = "piano";
+  private powerProfile = derivePowerModeProfile(false, 0);
 
   get state(): AudioContextState | "unavailable" {
     return this.context?.state ?? "unavailable";
@@ -104,6 +122,11 @@ export class KeyboardSynth {
     const accompaniment = context.createGain();
     const instrumentSend = context.createGain();
     const accompanimentSend = context.createGain();
+    const powerInstrumentSend = context.createGain();
+    const powerAccompanimentSend = context.createGain();
+    const powerDrive = context.createWaveShaper();
+    const powerTone = context.createBiquadFilter();
+    const powerOutput = context.createGain();
     const reverbInput = context.createGain();
     const reverb = context.createConvolver();
     const reverbWet = context.createGain();
@@ -119,20 +142,38 @@ export class KeyboardSynth {
     compressor.attack.value = 0.003;
     compressor.release.value = 0.2;
 
+    const power = this.powerProfile;
+    compressor.threshold.value = power.compressorThreshold;
     master.gain.value = this.muted ? 0 : this.volume;
-    instrument.gain.value = 1;
-    accompaniment.gain.value = this.accompanimentVolume;
-    instrumentSend.gain.value = 0.16;
-    accompanimentSend.gain.value = 0.095;
-    reverbWet.gain.value = 0.2;
+    instrument.gain.value = power.instrumentGain;
+    accompaniment.gain.value =
+      this.accompanimentVolume * power.accompanimentGainScale;
+    instrumentSend.gain.value = power.instrumentReverbSend;
+    accompanimentSend.gain.value = power.accompanimentReverbSend;
+    powerInstrumentSend.gain.value = power.saturationInstrumentSend;
+    powerAccompanimentSend.gain.value = power.saturationAccompanimentSend;
+    powerDrive.curve = createPowerSaturationCurve();
+    powerDrive.oversample = "none";
+    powerTone.type = "highshelf";
+    powerTone.frequency.value = 1_800;
+    powerTone.gain.value = 2.4;
+    powerOutput.gain.value = 0.72;
+    reverbWet.gain.value = power.reverbWet;
     reverb.buffer = this.createReverbImpulse(context);
 
     instrument.connect(master);
     instrument.connect(instrumentSend);
     instrumentSend.connect(reverbInput);
+    instrument.connect(powerInstrumentSend);
+    powerInstrumentSend.connect(powerDrive);
     accompaniment.connect(master);
     accompaniment.connect(accompanimentSend);
     accompanimentSend.connect(reverbInput);
+    accompaniment.connect(powerAccompanimentSend);
+    powerAccompanimentSend.connect(powerDrive);
+    powerDrive.connect(powerTone);
+    powerTone.connect(powerOutput);
+    powerOutput.connect(master);
     reverbInput.connect(reverb);
     reverb.connect(reverbWet);
     reverbWet.connect(master);
@@ -144,6 +185,10 @@ export class KeyboardSynth {
     this.master = master;
     this.instrument = instrument;
     this.accompaniment = accompaniment;
+    this.instrumentSend = instrumentSend;
+    this.accompanimentSend = accompanimentSend;
+    this.powerInstrumentSend = powerInstrumentSend;
+    this.powerAccompanimentSend = powerAccompanimentSend;
     this.compressor = compressor;
     this.reverb = reverb;
     this.reverbWet = reverbWet;
@@ -202,11 +247,75 @@ export class KeyboardSynth {
     this.waveform = waveform;
   }
 
+  /**
+   * Smoothly opens the concert-sized performance layer without changing pitch
+   * or recreating the graph. Safe to call before audio is unlocked and cheap
+   * enough for continuously changing gameplay energy.
+   */
+  setPowerMode(active: boolean, energy = 1): void {
+    const next = derivePowerModeProfile(active, energy);
+    const previousAmount = this.powerProfile.amount;
+    const crossedOffBoundary = (previousAmount === 0) !== (next.amount === 0);
+    if (
+      !crossedOffBoundary &&
+      Math.abs(previousAmount - next.amount) < 0.008
+    ) {
+      return;
+    }
+    this.powerProfile = next;
+    this.applyPowerProfile(next);
+  }
+
+  private applyPowerProfile(profile: PowerModeProfile): void {
+    const context = this.context;
+    if (!context) return;
+    const now = context.currentTime;
+    this.instrument?.gain.setTargetAtTime(profile.instrumentGain, now, 0.055);
+    this.accompaniment?.gain.setTargetAtTime(
+      this.accompanimentVolume * profile.accompanimentGainScale,
+      now,
+      0.07,
+    );
+    this.instrumentSend?.gain.setTargetAtTime(
+      profile.instrumentReverbSend,
+      now,
+      0.085,
+    );
+    this.accompanimentSend?.gain.setTargetAtTime(
+      profile.accompanimentReverbSend,
+      now,
+      0.09,
+    );
+    this.powerInstrumentSend?.gain.setTargetAtTime(
+      profile.saturationInstrumentSend,
+      now,
+      0.06,
+    );
+    this.powerAccompanimentSend?.gain.setTargetAtTime(
+      profile.saturationAccompanimentSend,
+      now,
+      0.075,
+    );
+    this.reverbWet?.gain.setTargetAtTime(profile.reverbWet, now, 0.095);
+    this.compressor?.threshold.setTargetAtTime(
+      profile.compressorThreshold,
+      now,
+      0.07,
+    );
+    for (const voice of this.voices.values()) {
+      voice.panner.pan.setTargetAtTime(
+        Math.min(0.78, Math.max(-0.78, voice.basePan * profile.stereoWidthScale)),
+        now,
+        0.055,
+      );
+    }
+  }
+
   setAccompanimentVolume(volume: number): void {
     this.accompanimentVolume = Math.min(1, Math.max(0, volume));
     if (!this.accompaniment || !this.context) return;
     this.accompaniment.gain.setTargetAtTime(
-      this.accompanimentVolume,
+      this.accompanimentVolume * this.powerProfile.accompanimentGainScale,
       this.context.currentTime,
       0.018,
     );
@@ -266,7 +375,11 @@ export class KeyboardSynth {
     }
 
     const now = context.currentTime + 0.002;
-    const intensity = Math.min(1, Math.max(0, step.intensity));
+    const requestedPower = step.power ?? this.powerProfile.amount;
+    const power = Number.isFinite(requestedPower)
+      ? Math.min(1, Math.max(0, requestedPower))
+      : 0;
+    const intensity = powerAccompanimentIntensity(step.intensity, power);
     const beatDuration = Math.min(
       4,
       Math.max(0.08, step.beatDurationSeconds),
@@ -289,6 +402,31 @@ export class KeyboardSynth {
       gain.gain.setValueAtTime(
         (step.subdivision === 0 ? 0.028 : 0.018) + intensity * 0.018,
         now,
+      );
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(destination);
+      this.trackAccompanimentSource(source, [filter, gain]);
+      source.start(now);
+      source.stop(now + duration + 0.01);
+    }
+
+    // A short filtered cymbal bloom marks the downbeat in POWER without
+    // turning the practice groove into a wall of noise.
+    if (power > 0.015 && step.subdivision === 0 && beatInMeasure === 0) {
+      const source = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      const gain = context.createGain();
+      const duration = 0.1 + power * 0.05;
+      source.buffer = this.getNoiseBuffer(context);
+      filter.type = "highpass";
+      filter.frequency.value = 3_100 + power * 1_100;
+      filter.Q.value = 0.52;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(
+        0.012 + power * 0.045,
+        now + 0.004,
       );
       gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
       source.connect(filter);
@@ -368,34 +506,71 @@ export class KeyboardSynth {
       }
     }
 
+    // A restrained pickup kick adds forward motion at high POWER and occurs
+    // only once per measure, keeping the eighth-note scheduler inexpensive.
+    if (
+      power > 0.62 &&
+      step.subdivision === 1 &&
+      beatInMeasure === beatsPerMeasure - 1
+    ) {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(86, now);
+      oscillator.frequency.exponentialRampToValueAtTime(48, now + 0.085);
+      gain.gain.setValueAtTime(0.06 + power * 0.085, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+      oscillator.connect(gain);
+      gain.connect(destination);
+      this.trackAccompanimentSource(oscillator, [gain]);
+      oscillator.start(now);
+      oscillator.stop(now + 0.125);
+    }
+
     const rhythmHit =
       (step.subdivision === 1 && intensity >= 0.18) ||
-      (step.subdivision === 0 && beatInMeasure === 0 && intensity < 0.18);
+      (step.subdivision === 0 &&
+        beatInMeasure === 0 &&
+        (intensity < 0.18 || power > 0.16));
     if (rhythmHit) {
       const gain = context.createGain();
       const filter = context.createBiquadFilter();
       const duration = Math.min(0.24, beatDuration * 0.24);
       gain.gain.setValueAtTime(0.0001, now);
       gain.gain.exponentialRampToValueAtTime(
-        0.025 + intensity * 0.035,
+        0.025 + intensity * 0.035 + power * 0.012,
         now + 0.006,
       );
       gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
       filter.type = "lowpass";
-      filter.frequency.value = 1_050 + intensity * 950;
+      filter.frequency.value = 1_050 + intensity * 950 + power * 620;
       filter.Q.value = 0.8;
       gain.connect(filter);
       filter.connect(destination);
 
-      for (const [index, offset] of [12, 19, 24].entries()) {
+      const fallbackPitches = [12, 19, 24].map(
+        (offset) => step.tonicMidi + offset,
+      );
+      const harmonyPitches =
+        power > 0.08 && step.harmonyPitches && step.harmonyPitches.length > 0
+          ? [...step.harmonyPitches].slice(0, 4)
+          : fallbackPitches;
+      if (power > 0.68 && harmonyPitches.length < 4) {
+        const upperRoot = harmonyPitches[0] + 12;
+        if (upperRoot <= 84 && !harmonyPitches.includes(upperRoot)) {
+          harmonyPitches.push(upperRoot);
+        }
+      }
+
+      for (const [index, pitch] of harmonyPitches.entries()) {
         const oscillator = context.createOscillator();
-        oscillator.type = offset === 19 ? "triangle" : "sawtooth";
-        oscillator.frequency.value = midiToFrequency(step.tonicMidi + offset);
-        oscillator.detune.value = offset === 24 ? 3 : -2;
+        oscillator.type = index % 3 === 1 ? "triangle" : "sawtooth";
+        oscillator.frequency.value = midiToFrequency(pitch);
+        oscillator.detune.value = index === harmonyPitches.length - 1 ? 3 : -2;
         oscillator.connect(gain);
         this.trackAccompanimentSource(
           oscillator,
-          index === 2 ? [gain, filter] : [],
+          index === harmonyPitches.length - 1 ? [gain, filter] : [],
         );
         oscillator.start(now);
         oscillator.stop(now + duration + 0.02);
@@ -441,6 +616,8 @@ export class KeyboardSynth {
       beatDurationSeconds,
       tonicMidi: harmony.bassMidi,
       intensity: Math.min(1, Math.max(0, options.intensity ?? 0.62)),
+      power: this.powerProfile.amount,
+      harmonyPitches: harmony.pitches,
     });
     if (played) {
       this.accompanimentSongId = options.song.id;
@@ -494,7 +671,14 @@ export class KeyboardSynth {
     }
 
     const startAt = Math.max(context.currentTime + 0.002, when ?? 0);
-    const normalizedVelocity = Math.min(1, Math.max(0.03, velocity));
+    const normalizedVelocity = Number.isFinite(velocity)
+      ? Math.min(1, Math.max(0.03, velocity))
+      : 0.8;
+    const power = this.powerProfile;
+    const expressiveVelocity = shapePowerVelocity(
+      normalizedVelocity,
+      power.amount,
+    );
     const frequency = midiToFrequency(midi);
     const gain = context.createGain();
     const filter = context.createBiquadFilter();
@@ -507,11 +691,14 @@ export class KeyboardSynth {
     const brightCutoff =
       this.waveform === "organ"
         ? 6_800
-        : 2_100 + normalizedVelocity ** 1.35 * 5_400 + Math.max(0, midi - 48) * 34;
+        : 2_100 +
+          expressiveVelocity ** 1.35 * 5_400 +
+          Math.max(0, midi - 48) * 34 +
+          power.brightnessLiftHz;
     const restingCutoff =
       this.waveform === "electric"
-        ? 1_850 + normalizedVelocity * 1_500
-        : 1_450 + normalizedVelocity * 1_850;
+        ? 1_850 + expressiveVelocity * 1_500 + power.brightnessLiftHz * 0.22
+        : 1_450 + expressiveVelocity * 1_850 + power.brightnessLiftHz * 0.18;
     filter.frequency.setValueAtTime(brightCutoff, startAt);
     if (this.waveform !== "organ") {
       filter.frequency.exponentialRampToValueAtTime(
@@ -520,7 +707,11 @@ export class KeyboardSynth {
       );
     }
     filter.Q.value = this.waveform === "electric" ? 1.15 : 0.58;
-    panner.pan.value = Math.min(0.58, Math.max(-0.58, (midi - 60) / 23));
+    const basePan = Math.min(0.58, Math.max(-0.58, (midi - 60) / 23));
+    panner.pan.value = Math.min(
+      0.78,
+      Math.max(-0.78, basePan * power.stereoWidthScale),
+    );
     gain.connect(filter);
     filter.connect(panner);
     panner.connect(this.instrument);
@@ -531,10 +722,12 @@ export class KeyboardSynth {
     gain.gain.setValueAtTime(1, startAt);
     const bodyLevel =
       (this.waveform === "organ" ? 0.04 : 0.036) +
-      normalizedVelocity ** 1.55 * (this.waveform === "organ" ? 0.073 : 0.096);
+      expressiveVelocity ** 1.55 *
+        (this.waveform === "organ" ? 0.073 : 0.096);
+    const expressiveBodyLevel = bodyLevel * power.bodyGain;
     const registerDecay = Math.min(1.18, Math.max(0.62, 1.08 - (midi - 48) * 0.018));
 
-    const partials: Array<{
+    const basePartials: Array<{
       ratio: number;
       type: OscillatorType;
       detune: number;
@@ -563,6 +756,29 @@ export class KeyboardSynth {
               { ratio: 3.015, type: "sine", detune: 1.1, level: 0.065, decay: 1.05, sustain: 0.006 },
               { ratio: 5.04, type: "sine", detune: -1, level: 0.024, decay: 0.55, sustain: 0.003 },
             ];
+    const partials =
+      power.octaveGain > 0.001 && this.waveform !== "organ"
+        ? [
+            ...basePartials,
+            midi >= 60
+              ? {
+                  ratio: 0.5,
+                  type: "sine" as const,
+                  detune: -0.8,
+                  level: power.octaveGain,
+                  decay: 2.7,
+                  sustain: 0.035,
+                }
+              : {
+                  ratio: 2.002,
+                  type: "sine" as const,
+                  detune: 0.8,
+                  level: power.octaveGain,
+                  decay: 1.45,
+                  sustain: 0.012,
+                },
+          ]
+        : basePartials;
 
     let naturalDuration = this.waveform === "organ" ? 45 : this.waveform === "electric" ? 9 : 8;
     for (const [index, partial] of partials.entries()) {
@@ -572,7 +788,7 @@ export class KeyboardSynth {
       oscillator.type = partial.type;
       oscillator.frequency.setValueAtTime(frequency * partial.ratio, startAt);
       oscillator.detune.value = partial.detune;
-      const partialPeak = Math.max(0.0002, bodyLevel * partial.level);
+      const partialPeak = Math.max(0.0002, expressiveBodyLevel * partial.level);
       const attack = this.waveform === "organ" ? 0.015 : 0.0035 + index * 0.0007;
       partialGain.gain.setValueAtTime(0.0001, startAt);
       partialGain.gain.exponentialRampToValueAtTime(partialPeak, startAt + attack);
@@ -610,12 +826,19 @@ export class KeyboardSynth {
       hammer.buffer = this.getNoiseBuffer(context);
       hammerFilter.type = "bandpass";
       hammerFilter.frequency.value =
-        1_650 + normalizedVelocity ** 1.4 * 3_900 + Math.max(0, midi - 48) * 22;
+        1_650 +
+        expressiveVelocity ** 1.4 * 3_900 +
+        Math.max(0, midi - 48) * 22 +
+        power.brightnessLiftHz * 0.34;
       hammerFilter.Q.value = this.waveform === "organ" ? 1.8 : 0.9;
       const hammerLevel =
         (this.waveform === "organ" ? 0.006 : 0.012) +
-        normalizedVelocity ** 2 * (this.waveform === "piano" ? 0.064 : 0.038);
-      hammerGain.gain.setValueAtTime(Math.max(0.0001, hammerLevel), startAt);
+        expressiveVelocity ** 2 *
+          (this.waveform === "piano" ? 0.064 : 0.038);
+      hammerGain.gain.setValueAtTime(
+        Math.max(0.0001, hammerLevel * power.hammerGain),
+        startAt,
+      );
       hammerGain.gain.exponentialRampToValueAtTime(
         0.0001,
         startAt + (this.waveform === "organ" ? 0.012 : 0.028),
@@ -634,7 +857,10 @@ export class KeyboardSynth {
       const thumpGain = context.createGain();
       thump.type = "sine";
       thump.frequency.setValueAtTime(72 + Math.max(0, midi - 48) * 1.4, startAt);
-      thumpGain.gain.setValueAtTime(0.009 + normalizedVelocity * 0.013, startAt);
+      thumpGain.gain.setValueAtTime(
+        (0.009 + expressiveVelocity * 0.013) * (1 + power.amount * 0.16),
+        startAt,
+      );
       thumpGain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.052);
       thump.connect(thumpGain);
       thumpGain.connect(gain);
@@ -646,6 +872,8 @@ export class KeyboardSynth {
 
     const voice: SynthVoice = {
       gain,
+      panner,
+      basePan,
       oscillators,
       transients,
       nodes,
@@ -744,6 +972,15 @@ export class KeyboardSynth {
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.055);
     oscillator.connect(gain);
     gain.connect(this.master);
+    oscillator.onended = () => {
+      for (const node of [oscillator, gain]) {
+        try {
+          node.disconnect();
+        } catch {
+          // Teardown may have already detached this short one-shot chain.
+        }
+      }
+    };
     oscillator.start(now);
     oscillator.stop(now + 0.065);
   }
@@ -763,6 +1000,10 @@ export class KeyboardSynth {
     this.master = null;
     this.instrument = null;
     this.accompaniment = null;
+    this.instrumentSend = null;
+    this.accompanimentSend = null;
+    this.powerInstrumentSend = null;
+    this.powerAccompanimentSend = null;
     this.compressor = null;
     this.reverb = null;
     this.reverbWet = null;

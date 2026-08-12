@@ -387,6 +387,14 @@ input:focus-visible {
   box-shadow: inset 0 0 110px rgba(0, 0, 0, 0.72);
 }
 
+.stage-wrap.is-power-mode::before {
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 217, 106, 0.15), transparent 17rem),
+    radial-gradient(circle at 6% 12%, rgba(215, 255, 63, 0.18), transparent 11rem),
+    radial-gradient(circle at 94% 8%, rgba(255, 77, 130, 0.17), transparent 13rem);
+  animation: power-stage-breathe 1.9s ease-in-out infinite alternate;
+}
+
 .stage-head {
   position: absolute;
   z-index: 12;
@@ -536,6 +544,146 @@ input:focus-visible {
   box-shadow: 0 0 18px color-mix(in srgb, var(--streak-color) 56%, transparent);
 }
 
+.power-meter {
+  --power-color: var(--acid);
+  position: relative;
+  align-self: stretch;
+  width: clamp(190px, 28cqi, 300px);
+  min-height: 92px;
+  overflow: hidden;
+  padding: 11px 13px 10px;
+  border: 1px solid color-mix(in srgb, var(--power-color) 44%, rgba(255, 255, 255, 0.12));
+  background:
+    radial-gradient(circle at 50% -60%, color-mix(in srgb, var(--power-color) 15%, transparent), transparent 68%),
+    repeating-linear-gradient(112deg, transparent 0 20px, rgba(255, 255, 255, 0.02) 21px 22px),
+    rgba(5, 6, 11, 0.88);
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 22px color-mix(in srgb, var(--power-color) 8%, transparent);
+  clip-path: polygon(9px 0, calc(100% - 9px) 0, 100% 9px, 100% calc(100% - 9px), calc(100% - 9px) 100%, 9px 100%, 0 calc(100% - 9px), 0 9px);
+  pointer-events: none;
+  transition: border-color 240ms ease, box-shadow 240ms ease, filter 240ms ease;
+}
+
+.power-meter::before {
+  position: absolute;
+  top: 0;
+  right: 13%;
+  left: 13%;
+  height: 3px;
+  content: "";
+  background: linear-gradient(90deg, transparent, var(--power-color), transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--power-color) 52%, transparent);
+}
+
+.power-meter-head,
+.power-meter-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  font-family: var(--font-mono);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.power-meter-head span {
+  color: rgba(248, 247, 242, 0.62);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+}
+
+.power-meter-head strong {
+  color: var(--power-color);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 14px color-mix(in srgb, var(--power-color) 64%, transparent);
+}
+
+.power-meter-track {
+  position: relative;
+  display: block;
+  height: 15px;
+  margin-top: 11px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background:
+    repeating-linear-gradient(90deg, transparent 0 calc(10% - 2px), rgba(3, 3, 6, 0.82) calc(10% - 2px) 10%),
+    rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 2px 7px rgba(0, 0, 0, 0.56);
+}
+
+.power-meter-track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 0;
+  background:
+    linear-gradient(90deg, var(--cyan), var(--violet), var(--rose), var(--acid));
+  background-size: 180% 100%;
+  box-shadow: 0 0 17px color-mix(in srgb, var(--power-color) 58%, transparent);
+  transition: width 220ms ease-out;
+}
+
+.power-meter-track b {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 2px), rgba(3, 3, 6, 0.78) calc(10% - 2px) 10%);
+}
+
+.power-meter-foot {
+  margin-top: 9px;
+  color: rgba(248, 247, 242, 0.45);
+  font-size: 7px;
+  letter-spacing: 0.065em;
+}
+
+.power-meter-foot strong {
+  color: rgba(248, 247, 242, 0.78);
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.power-meter.is-active {
+  --power-color: #ffd96a;
+  border-color: rgba(255, 217, 106, 0.7);
+  background:
+    radial-gradient(circle at 50% -35%, rgba(255, 217, 106, 0.22), transparent 64%),
+    repeating-linear-gradient(112deg, transparent 0 20px, rgba(255, 255, 255, 0.035) 21px 22px),
+    rgba(8, 7, 10, 0.94);
+  box-shadow:
+    0 16px 38px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.11),
+    0 0 30px rgba(255, 217, 106, 0.2),
+    5px 5px 0 rgba(141, 104, 255, 0.35);
+  animation: power-meter-breathe 1.85s ease-in-out infinite alternate;
+}
+
+.power-meter.is-active .power-meter-head span {
+  color: #ffd96a;
+  font-size: 9px;
+  text-shadow: 0 0 14px rgba(255, 217, 106, 0.56);
+}
+
+.power-meter.is-active .power-meter-head strong {
+  padding: 3px 5px 2px;
+  color: #050507;
+  background: #ffd96a;
+  text-shadow: none;
+}
+
+.power-meter.is-active .power-meter-track i {
+  background: linear-gradient(90deg, #ff4d82, #ffd96a, #d7ff3f, #49e7ff);
+  background-size: 180% 100%;
+  animation: power-meter-flow 1.6s linear infinite;
+}
+
+.performance-hud.is-power-mode .performance-card {
+  border-color: rgba(255, 217, 106, 0.32);
+}
+
 .performance-label,
 .performance-subline {
   display: block;
@@ -640,7 +788,7 @@ input:focus-visible {
   --encouragement-color: var(--cyan);
   position: absolute;
   z-index: 15;
-  top: 82px;
+  top: 158px;
   left: 50%;
   width: min(340px, calc(100% - 440px));
   min-width: 230px;
@@ -699,7 +847,7 @@ input:focus-visible {
 }
 
 .stage-encouragement.variant-milestone {
-  top: 70px;
+  top: 146px;
   width: min(450px, calc(100% - 400px));
   min-height: 112px;
   padding: 7px 82px 14px 17px;
@@ -877,6 +1025,20 @@ input:focus-visible {
 @keyframes finale-breathe {
   from { opacity: 0.7; box-shadow: 0 0 10px rgba(215, 255, 63, 0.06); }
   to { opacity: 1; box-shadow: 0 0 32px rgba(215, 255, 63, 0.18); }
+}
+
+@keyframes power-stage-breathe {
+  from { opacity: 0.78; filter: saturate(1) brightness(0.98); }
+  to { opacity: 1; filter: saturate(1.12) brightness(1.05); }
+}
+
+@keyframes power-meter-breathe {
+  from { filter: brightness(0.96) saturate(1); transform: translateY(0); }
+  to { filter: brightness(1.08) saturate(1.1); transform: translateY(-1px); }
+}
+
+@keyframes power-meter-flow {
+  to { background-position: -180% 0; }
 }
 
 .performance-results-overlay {
@@ -2925,6 +3087,21 @@ kbd {
     padding: 10px 11px 9px;
   }
 
+  .power-meter {
+    width: min(214px, 34cqi);
+    min-height: 78px;
+    padding: 9px 10px 8px;
+  }
+
+  .power-meter-track {
+    height: 12px;
+    margin-top: 8px;
+  }
+
+  .power-meter-foot {
+    margin-top: 7px;
+  }
+
   .score-value {
     font-size: clamp(22px, 4.2cqi, 30px);
   }
@@ -2958,14 +3135,37 @@ kbd {
 
 @container performance-stage (max-width: 520px) {
   .performance-hud {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(126px, 0.95fr) minmax(0, 1fr);
     right: 8px;
     left: 8px;
     gap: 6px;
   }
 
   .performance-card {
-    width: calc(50% - 3px);
+    width: auto;
+    min-width: 0;
     min-height: 74px;
+  }
+
+  .power-meter {
+    width: auto;
+    min-width: 0;
+    min-height: 74px;
+    padding-inline: 8px;
+  }
+
+  .power-meter-head span,
+  .power-meter-foot span {
+    display: none;
+  }
+
+  .power-meter-head {
+    justify-content: center;
+  }
+
+  .power-meter-foot {
+    justify-content: center;
   }
 
   .performance-subline {
@@ -3141,13 +3341,33 @@ kbd {
     top: 48px;
     right: 10px;
     left: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(126px, 0.95fr) minmax(0, 1fr);
     gap: 8px;
   }
 
   .performance-card {
-    width: calc(50% - 4px);
+    width: auto;
+    min-width: 0;
     min-height: 72px;
     padding: 10px 11px 9px;
+  }
+
+  .power-meter {
+    width: auto;
+    min-width: 0;
+    min-height: 72px;
+    padding: 8px;
+  }
+
+  .power-meter-head span,
+  .power-meter-foot span {
+    display: none;
+  }
+
+  .power-meter-head,
+  .power-meter-foot {
+    justify-content: center;
   }
 
   .performance-score {
@@ -3544,6 +3764,8 @@ kbd {
   .score-value,
   .score-delta,
   .combo-value,
+  .power-meter,
+  .power-meter-track i,
   .stage-encouragement,
   .encouragement-kicker,
   .stage-encouragement > strong,
@@ -3563,6 +3785,12 @@ kbd {
     opacity: 1 !important;
     filter: none !important;
     transform: none !important;
+    animation: none !important;
+  }
+
+  .stage-wrap.is-power-mode::before {
+    opacity: 0.88;
+    filter: none;
     animation: none !important;
   }
 
