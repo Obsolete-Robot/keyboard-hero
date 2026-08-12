@@ -227,6 +227,10 @@
   color: color-mix(in srgb, var(--kh-primary) 84%, white);
 }
 
+.kh-stage__finger-guide-title-compact {
+  display: none;
+}
+
 .kh-stage__finger-guide-legend {
   position: absolute;
   bottom: calc(100% + 5px);
@@ -600,7 +604,16 @@
   }
 
   .kh-stage__finger-guide-title {
+    font-size: 7px;
+    letter-spacing: 0.08em;
+  }
+
+  .kh-stage__finger-guide-title-full {
     display: none;
+  }
+
+  .kh-stage__finger-guide-title-compact {
+    display: inline;
   }
 
   .kh-stage__finger-guide-legend {

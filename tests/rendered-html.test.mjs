@@ -242,8 +242,11 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /tailCap/);
   assert.match(stage, /finger\?: KeyboardFinger/);
   assert.match(stage, /fingeringHands\?: readonly KeyboardStageHand\[\]/);
+  assert.match(stage, /fingeringRange\?: KeyboardStageFingeringRange/);
   assert.match(stage, /authoredFingeringForNote/);
   assert.match(stage, /const nextStartBeat/);
+  assert.match(stage, /const wrappedNextStartBeat/);
+  assert.match(stage, /noteIsInFingeringRange/);
   assert.match(stage, /left: \[5, 4, 3, 2, 1\]/);
   assert.match(stage, /right: \[1, 2, 3, 4, 5\]/);
   assert.match(stage, /1: "Thumb"/);
@@ -255,6 +258,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
   assert.match(stageCss, /\.kh-stage__finger-guide \{/);
   assert.match(stageCss, /\.kh-stage__finger\.is-active/);
+  assert.match(stageCss, /\.kh-stage__finger-guide-title-compact/);
   assert.match(stageCss, /\.kh-stage--power/);
   assert.match(stageCss, /kh-stage-power-breathe/);
   assert.match(results, /Official score sheet/);

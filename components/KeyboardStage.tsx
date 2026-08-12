@@ -32,6 +32,11 @@ export type KeyboardNoteState =
 export type KeyboardFinger = 1 | 2 | 3 | 4 | 5;
 export type KeyboardStageHand = "left" | "right";
 
+export interface KeyboardStageFingeringRange {
+  startBeat: number;
+  endBeat: number;
+}
+
 export interface KeyboardStageNote {
   /** Stable identifier used to preserve a note visual while the song moves. */
   id: string | number;
@@ -110,6 +115,8 @@ export interface KeyboardStageProps {
   travelBeats?: number;
   /** Restricts the visible suggested-fingering rows when a lesson knows its hands. */
   fingeringHands?: readonly KeyboardStageHand[];
+  /** Restricts suggested fingering to a loop or lesson section: [startBeat, endBeat). */
+  fingeringRange?: KeyboardStageFingeringRange;
   showHud?: boolean;
   /** Short label centered over the timing target. */
   strikeLabel?: string;
@@ -419,6 +426,31 @@ function authoredFingeringForNote(
   return { hand: note.hand, finger: note.finger };
 }
 
+function normalizeFingeringRange(
+  range: KeyboardStageFingeringRange | undefined,
+): KeyboardStageFingeringRange | null {
+  if (
+    !range ||
+    !Number.isFinite(range.startBeat) ||
+    !Number.isFinite(range.endBeat) ||
+    range.endBeat <= range.startBeat
+  ) {
+    return null;
+  }
+  return range;
+}
+
+function noteIsInFingeringRange(
+  note: KeyboardStageNote,
+  range: KeyboardStageFingeringRange | null,
+) {
+  return (
+    !range ||
+    (note.startBeat >= range.startBeat - 0.000_001 &&
+      note.startBeat < range.endBeat - 0.000_001)
+  );
+}
+
 function makeFingerLabelTexture(hand: GuideHand, finger: KeyboardFinger) {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
@@ -497,6 +529,7 @@ export default function KeyboardStage({
   power = DEFAULT_POWER_STATE,
   travelBeats = 8,
   fingeringHands,
+  fingeringRange,
   showHud = true,
   strikeLabel = "PLAY HERE",
   className = "",
@@ -541,11 +574,14 @@ export default function KeyboardStage({
     return result;
   }, [notes]);
   const fingerGuide = useMemo(() => {
+    const range = normalizeFingeringRange(fingeringRange);
     const presentHands = new Set<GuideHand>();
     const targets = new Map<string, FingerGuideTarget>();
     const authoredNotes = notes.flatMap((note) => {
       const fingering = authoredFingeringForNote(note);
-      return fingering ? [{ note, ...fingering }] : [];
+      return fingering && noteIsInFingeringRange(note, range)
+        ? [{ note, ...fingering }]
+        : [];
     });
     authoredNotes.forEach(({ hand }) => presentHands.add(hand));
     const hands = fingeringHands
@@ -563,6 +599,15 @@ export default function KeyboardStage({
           : next,
       null,
     );
+    const wrappedNextStartBeat =
+      nextStartBeat ??
+      (range && currentBeat >= range.endBeat - 0.000_001
+        ? authoredNotes.reduce<number | null>(
+            (first, { note }) =>
+              first === null || note.startBeat < first ? note.startBeat : first,
+            null,
+          )
+        : null);
 
     authoredNotes.forEach(({ note, hand, finger }) => {
       if (!hands.includes(hand)) return;
@@ -571,8 +616,8 @@ export default function KeyboardStage({
         note.startBeat + (note.durationBeats ?? 0.28) >= currentBeat;
       const isUpcoming =
         !isActive &&
-        nextStartBeat !== null &&
-        Math.abs(note.startBeat - nextStartBeat) <= 1e-6;
+        wrappedNextStartBeat !== null &&
+        Math.abs(note.startBeat - wrappedNextStartBeat) <= 1e-6;
       if (!isActive && !isUpcoming) return;
       const key = `${hand}:${finger}`;
       const previous = targets.get(key);
@@ -586,7 +631,7 @@ export default function KeyboardStage({
     });
 
     return { hands, targets: [...targets.values()] };
-  }, [currentBeat, fingeringHands, notes]);
+  }, [currentBeat, fingeringHands, fingeringRange, notes]);
   const fingerGuideLabel = useMemo(() => {
     if (fingerGuide.hands.length === 0) return "No finger targets are available.";
     const targets = [...fingerGuide.targets]
@@ -612,6 +657,7 @@ export default function KeyboardStage({
   const currentBeatRef = useRef(currentBeat);
   const currentTimeRef = useRef(currentTime);
   const pressedRef = useRef(pressedMidiNotes);
+  const fingeringRangeRef = useRef(fingeringRange);
   const palette = useMemo(() => resolvePalette(theme), [theme]);
   const paletteRef = useRef(palette);
   const intensityRef = useRef(intensity);
@@ -631,6 +677,7 @@ export default function KeyboardStage({
     currentBeatRef.current = currentBeat;
     currentTimeRef.current = currentTime;
     pressedRef.current = pressedMidiNotes;
+    fingeringRangeRef.current = fingeringRange;
     paletteRef.current = palette;
     intensityRef.current = intensity;
     powerRef.current = power;
@@ -644,6 +691,7 @@ export default function KeyboardStage({
     currentBeat,
     currentTime,
     pressedMidiNotes,
+    fingeringRange,
     palette,
     intensity,
     power,
@@ -2054,6 +2102,7 @@ export default function KeyboardStage({
 
       const liveIds = new Set<string | number>();
       const sustainedMidi = new Set<number>();
+      const labelRange = normalizeFingeringRange(fingeringRangeRef.current);
       notesRef.current.forEach((note) => {
         if (
           note.midi < FIRST_MIDI_NOTE ||
@@ -2191,6 +2240,7 @@ export default function KeyboardStage({
         const showFingerLabel =
           !missed &&
           note.state !== "hit" &&
+          noteIsInFingeringRange(note, labelRange) &&
           note.startBeat <= beat + 2 &&
           tailBeat >= beat - 0.08;
         if (visual.fingerLabel && visual.fingerLabelMaterial) {
@@ -2661,7 +2711,12 @@ export default function KeyboardStage({
           aria-label="Suggested piano finger guide"
         >
           <span className="kh-stage__finger-guide-title" aria-hidden="true">
-            SUGGESTED FINGERING
+            <span className="kh-stage__finger-guide-title-full">
+              SUGGESTED FINGERING
+            </span>
+            <span className="kh-stage__finger-guide-title-compact">
+              SUGGESTED
+            </span>
           </span>
           <span className="kh-stage__finger-guide-legend" aria-hidden="true">
             T thumb · I index · M middle · R ring · P pinky

@@ -1203,6 +1203,7 @@ export default function Home() {
               currentTime={hero.positionSeconds}
               feedback={stageFeedback}
               fingeringHands={fingeringHands}
+              fingeringRange={fingeringRange}
               intensity={Math.min(
                 2,
                 0.85 + hero.score.combo / 28 + hero.power.energy * 0.22,
