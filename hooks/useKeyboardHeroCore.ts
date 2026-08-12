@@ -16,7 +16,15 @@ import {
 import {
   isValidMIDICalibrationSpan,
   mapMIDINoteToKeyboardRange,
+  normalizeMIDICalibrationEntries,
+  parseMIDICalibrationMapping,
 } from "@/lib/midiCalibration";
+import { chooseAutomaticMIDIInput } from "@/lib/midiInputs";
+import {
+  decodeMIDITransportPress,
+  isMIDITransportControlPortName,
+  type MIDITransportAction,
+} from "@/lib/midiTransport";
 import {
   advancePowerMode,
   applyPowerJudgement,
@@ -28,8 +36,18 @@ import {
   type KeyboardHeroPowerState,
 } from "@/lib/powerMode";
 import { MIDI_MAX, MIDI_MIN, type Song, type SongNote } from "@/lib/songs";
+import {
+  clearNoteClaims,
+  findPressCandidate,
+  judgeSustain,
+  noteWithinPlaybackRange,
+  sustainRequirement,
+  timingGradeForOffset,
+  type SustainJudgement,
+} from "@/lib/sustainScoring";
 
 export type { KeyboardHeroPowerState } from "@/lib/powerMode";
+export type { SustainGrade } from "@/lib/sustainScoring";
 
 export type PracticeMode = "flow" | "wait" | "listen";
 export type NoteGrade = "perfect" | "great" | "good" | "miss";
@@ -45,9 +63,17 @@ export interface NoteResult {
   midi: number;
   grade: NoteGrade;
   offsetMs: number;
+  /** True when an early press was held through the authored strike time. */
+  earlyCaptured?: boolean;
+  /** Final authored-duration judgement. Tap notes and unresolved holds omit it. */
+  sustain?: NoteSustainResult;
 }
 
+export type NoteSustainResult = SustainJudgement;
+
 export interface NoteFeedback extends NoteResult {
+  /** Shared monotonic ordering across onset and sustain feedback streams. */
+  sequence: number;
   /** Shared by all resolved tones in one authored chord; extras fall back to their unique id. */
   groupId: string;
   /** Exact score delta already including combo bonus and POWER multiplier. */
@@ -59,11 +85,34 @@ export interface NoteFeedback extends NoteResult {
 
 export interface KeyboardHeroScore {
   points: number;
+  /** Portion of points earned from authored note duration rather than onset. */
+  sustainPoints: number;
   combo: number;
   bestCombo: number;
   hits: number;
   misses: number;
   accuracy: number;
+}
+
+export interface HeldNoteState {
+  noteId: string;
+  midi: number;
+  phase: "armed" | "holding";
+  /** Original physical press timing; negative values are early. */
+  pressOffsetMs: number;
+  heldBeats: number;
+  requiredBeats: number;
+  progress: number;
+}
+
+export interface SustainFeedback extends NoteSustainResult {
+  /** Unique event identity; noteId remains the stable authored result identity. */
+  id: string;
+  noteId: string;
+  groupId: string;
+  midi: number;
+  /** Shared monotonic ordering across onset and sustain feedback streams. */
+  sequence: number;
 }
 
 export interface MIDIInputInfo {
@@ -83,8 +132,6 @@ export type MIDICalibrationPhase =
 export interface KeyboardHeroMIDICalibrationState {
   active: boolean;
   calibrated: boolean;
-  /** A saved alignment exists but must be verified again for this connection. */
-  needsVerification: boolean;
   phase: MIDICalibrationPhase;
   /** Raw device note learned from the physical leftmost key. */
   rawNote: number | null;
@@ -111,6 +158,11 @@ export interface KeyboardHeroMIDIState {
   lastMappedNote: number | null;
   lastVelocity: number;
   lastMessageInRange: boolean | null;
+  /** Latest hardware transport press. Sequence makes repeated presses observable. */
+  lastTransportEvent: {
+    action: MIDITransportAction;
+    sequence: number;
+  } | null;
   calibration: KeyboardHeroMIDICalibrationState;
   error: string | null;
 }
@@ -154,6 +206,10 @@ export interface KeyboardHeroCore {
   latestFeedback: NoteFeedback | null;
   /** Recent uniquely keyed hit/miss events, including simultaneous chord tones. */
   feedbackEvents: NoteFeedback[];
+  /** Active authored-note claims, keyed by the song's stable note id. */
+  heldNotes: Map<string, HeldNoteState>;
+  latestSustainFeedback: SustainFeedback | null;
+  sustainFeedbackEvents: SustainFeedback[];
   score: KeyboardHeroScore;
   power: KeyboardHeroPowerState;
   midi: KeyboardHeroMIDIState;
@@ -209,6 +265,21 @@ interface ActiveMIDINoteMapping {
   source: string;
 }
 
+type PlayerNoteAttemptPhase = "armed" | "holding" | "released-before-start";
+
+interface ActivePlayerNoteAttempt {
+  note: SongNote;
+  sourceId: string;
+  pressBeat: number;
+  pressOffsetMs: number;
+  earlyCaptured: boolean;
+  phase: PlayerNoteAttemptPhase;
+  holdStartBeat: number;
+  requiredBeats: number;
+  multiplier: number;
+  sustainScored: boolean;
+}
+
 interface MIDICalibrationCandidate {
   key: string;
   rawNote: number;
@@ -220,9 +291,23 @@ type MIDIEnabledNavigator = Navigator & {
   requestMIDIAccess?: (options?: { sysex?: boolean }) => Promise<MIDIAccessLike>;
 };
 
+function isMIDITransportInput(input: MIDIInputLike): boolean {
+  const name = input.name ?? "";
+  if (isMIDITransportControlPortName(name)) return true;
+
+  // Without Akai's Windows driver, companion ports can be exposed as numbered
+  // MPK aliases instead of retaining their DAW/Plugin/Control labels.
+  return (
+    /\bmpk\s+mini\s+(?:iv|4)\b/i.test(name) &&
+    !/\b(?:midi|din)\s+port\b/i.test(name)
+  );
+}
+
 const SETTINGS_KEY = "keyboard-hero.settings.v1";
 const MIDI_CALIBRATION_KEY = "keyboard-hero.midi-calibration.v1";
+const MIDI_PREFERENCES_KEY = "keyboard-hero.midi-preferences.v1";
 const MIDI_CALIBRATION_TIMEOUT_MS = 25_000;
+const MIDI_TRANSPORT_DEDUP_MS = 160;
 const PRE_ROLL_SECONDS = 5;
 const POST_ROLL_MIN_SECONDS = 2.5;
 const POST_ROLL_CLEARANCE_BEATS = 1.75;
@@ -239,6 +324,7 @@ const DEFAULT_SETTINGS: KeyboardHeroSettings = {
 };
 const EMPTY_SCORE: KeyboardHeroScore = {
   points: 0,
+  sustainPoints: 0,
   combo: 0,
   bestCombo: 0,
   hits: 0,
@@ -248,7 +334,6 @@ const EMPTY_SCORE: KeyboardHeroScore = {
 const EMPTY_MIDI_CALIBRATION: KeyboardHeroMIDICalibrationState = {
   active: false,
   calibrated: false,
-  needsVerification: false,
   phase: "idle",
   rawNote: null,
   rightRawNote: null,
@@ -288,41 +373,31 @@ const COMPUTER_KEYS: Readonly<Record<string, number>> = {
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
 
-interface StoredMIDICalibration {
-  rawNote: number;
-  rightRawNote: number;
-  transpose: number;
+interface StoredMIDIPreferences {
+  preferredInputId: string | null;
+  channel: number | null;
 }
+
+const EMPTY_MIDI_PREFERENCES: StoredMIDIPreferences = {
+  preferredInputId: null,
+  channel: null,
+};
 
 function readMIDICalibration(inputId: string): KeyboardHeroMIDICalibrationState {
   if (typeof window === "undefined") return { ...EMPTY_MIDI_CALIBRATION };
   try {
-    const entries = JSON.parse(
-      window.localStorage.getItem(MIDI_CALIBRATION_KEY) ?? "{}",
-    ) as Record<string, Partial<StoredMIDICalibration>>;
-    const saved = entries[inputId];
-    const rawNote = Number(saved?.rawNote);
-    const rightRawNote = Number(saved?.rightRawNote);
-    const transpose = Number(saved?.transpose);
-    if (
-      !Number.isInteger(rawNote) ||
-      !Number.isInteger(rightRawNote) ||
-      !Number.isInteger(transpose) ||
-      rawNote < 0 ||
-      rightRawNote > 127 ||
-      !isValidMIDICalibrationSpan(rawNote, rightRawNote) ||
-      transpose !== MIDI_MIN - rawNote
-    ) {
-      return { ...EMPTY_MIDI_CALIBRATION };
-    }
+    const entries = normalizeMIDICalibrationEntries(
+      JSON.parse(window.localStorage.getItem(MIDI_CALIBRATION_KEY) ?? "{}"),
+    );
+    const saved = parseMIDICalibrationMapping(entries[inputId]);
+    if (!saved) return { ...EMPTY_MIDI_CALIBRATION };
     return {
       active: false,
-      calibrated: false,
-      needsVerification: true,
+      calibrated: true,
       phase: "idle",
-      rawNote,
-      rightRawNote,
-      transpose,
+      rawNote: saved.rawNote,
+      rightRawNote: saved.rightRawNote,
+      transpose: saved.transpose,
       error: null,
     };
   } catch {
@@ -336,9 +411,9 @@ function persistMIDICalibration(
 ): void {
   if (typeof window === "undefined") return;
   try {
-    const entries = JSON.parse(
-      window.localStorage.getItem(MIDI_CALIBRATION_KEY) ?? "{}",
-    ) as Record<string, StoredMIDICalibration>;
+    const entries = normalizeMIDICalibrationEntries(
+      JSON.parse(window.localStorage.getItem(MIDI_CALIBRATION_KEY) ?? "{}"),
+    );
     if (
       calibration.rawNote === null ||
       calibration.rightRawNote === null ||
@@ -353,6 +428,40 @@ function persistMIDICalibration(
       };
     }
     window.localStorage.setItem(MIDI_CALIBRATION_KEY, JSON.stringify(entries));
+  } catch {
+    // Storage can be unavailable in private browsing or embedded previews.
+  }
+}
+
+function readMIDIPreferences(): StoredMIDIPreferences {
+  if (typeof window === "undefined") return { ...EMPTY_MIDI_PREFERENCES };
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(MIDI_PREFERENCES_KEY) ?? "{}",
+    ) as Partial<StoredMIDIPreferences>;
+    const preferredInputId =
+      typeof parsed.preferredInputId === "string" && parsed.preferredInputId
+        ? parsed.preferredInputId
+        : null;
+    const channel =
+      parsed.channel === null || parsed.channel === undefined
+        ? null
+        : Number.isInteger(parsed.channel) && parsed.channel >= 0 && parsed.channel <= 15
+          ? parsed.channel
+          : null;
+    return { preferredInputId, channel };
+  } catch {
+    return { ...EMPTY_MIDI_PREFERENCES };
+  }
+}
+
+function persistMIDIPreferences(preferences: StoredMIDIPreferences): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      MIDI_PREFERENCES_KEY,
+      JSON.stringify(preferences),
+    );
   } catch {
     // Storage can be unavailable in private browsing or embedded previews.
   }
@@ -410,17 +519,18 @@ function readSettings(): KeyboardHeroSettings {
   }
 }
 
-function resultFor(note: SongNote, offsetMs: number): NoteResult {
-  const absoluteOffset = Math.abs(offsetMs);
-  const grade: NoteGrade =
-    absoluteOffset <= 55
-      ? "perfect"
-      : absoluteOffset <= 105
-        ? "great"
-        : absoluteOffset <= 180
-          ? "good"
-          : "miss";
-  return { id: note.id, midi: note.midi, grade, offsetMs };
+function resultFor(
+  note: SongNote,
+  offsetMs: number,
+  earlyCaptured = false,
+): NoteResult {
+  return {
+    id: note.id,
+    midi: note.midi,
+    grade: timingGradeForOffset(offsetMs, earlyCaptured),
+    offsetMs,
+    earlyCaptured: earlyCaptured || undefined,
+  };
 }
 
 export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
@@ -437,6 +547,14 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   );
   const [latestFeedback, setLatestFeedback] = useState<NoteFeedback | null>(null);
   const [feedbackEvents, setFeedbackEvents] = useState<NoteFeedback[]>([]);
+  const [heldNotes, setHeldNotes] = useState<Map<string, HeldNoteState>>(
+    () => new Map(),
+  );
+  const [latestSustainFeedback, setLatestSustainFeedback] =
+    useState<SustainFeedback | null>(null);
+  const [sustainFeedbackEvents, setSustainFeedbackEvents] = useState<
+    SustainFeedback[]
+  >([]);
   const [score, setScore] = useState<KeyboardHeroScore>(EMPTY_SCORE);
   const [power, setPower] = useState<KeyboardHeroPowerState>(() =>
     createPowerModeState(),
@@ -464,6 +582,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     lastMappedNote: null,
     lastVelocity: 0,
     lastMessageInRange: null,
+    lastTransportEvent: null,
     calibration: { ...EMPTY_MIDI_CALIBRATION },
     error: null,
   }));
@@ -478,8 +597,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const synthRef = useRef<KeyboardSynth | null>(null);
   const midiAccessRef = useRef<MIDIAccessLike | null>(null);
   const midiInputRef = useRef<MIDIInputLike | null>(null);
+  const midiTransportInputsRef = useRef<Map<string, MIDIInputLike>>(new Map());
   const selectedMIDIIdRef = useRef<string | null>(null);
   const midiChannelRef = useRef<number | null>(null);
+  const midiPreferencesRef = useRef<StoredMIDIPreferences>({
+    ...EMPTY_MIDI_PREFERENCES,
+  });
+  const midiConnectionPromiseRef = useRef<Promise<void> | null>(null);
+  const midiHookActiveRef = useRef(true);
+  const autoMIDIConnectAttemptedRef = useRef(false);
   const detectedMIDIChannelRef = useRef<number | null>(null);
   const midiCalibrationRef = useRef<KeyboardHeroMIDICalibrationState>({
     ...EMPTY_MIDI_CALIBRATION,
@@ -520,9 +646,18 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const countInBeatRateRef = useRef(0);
   const preRollVisualBeatRef = useRef(0);
   const heldSourcesRef = useRef<Map<number, Set<string>>>(new Map());
+  const playerNoteAttemptsRef = useRef<Map<string, ActivePlayerNoteAttempt>>(
+    new Map(),
+  );
+  const playerNoteIdBySourceRef = useRef<Map<string, string>>(new Map());
   const listenVoicesRef = useRef<Set<string>>(new Set());
   const lastMetronomeBeatRef = useRef<number | null>(null);
   const feedbackSequenceRef = useRef(0);
+  const midiTransportSequenceRef = useRef(0);
+  const lastMIDITransportPressRef = useRef<{
+    action: MIDITransportAction;
+    time: number;
+  } | null>(null);
   const backingBandActiveRef = useRef(false);
   const backingBandFailedStepRef = useRef<number | null>(null);
 
@@ -633,17 +768,68 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     [synth],
   );
 
-  const releaseHeldSources = useCallback((sourcePrefix: string) => {
-    for (const [midiNote, sources] of heldSourcesRef.current) {
-      for (const sourceId of [...sources]) {
-        if (!sourceId.startsWith(sourcePrefix)) continue;
-        synthRef.current?.noteOff(sourceId, undefined, 0.04);
-        sources.delete(sourceId);
-      }
-      if (sources.size === 0) heldSourcesRef.current.delete(midiNote);
+  const publishHeldNotes = useCallback((atBeat = positionRef.current) => {
+    const next = new Map<string, HeldNoteState>();
+    for (const [noteId, attempt] of playerNoteAttemptsRef.current) {
+      if (attempt.phase === "released-before-start") continue;
+      const heldBeats =
+        attempt.phase === "holding"
+          ? Math.max(0, atBeat - attempt.holdStartBeat)
+          : 0;
+      const progress =
+        attempt.phase === "holding" && attempt.requiredBeats > 0
+          ? clamp(heldBeats / attempt.requiredBeats, 0, 1)
+          : 0;
+      next.set(noteId, {
+        noteId,
+        midi: attempt.note.midi,
+        phase: attempt.phase,
+        pressOffsetMs: attempt.pressOffsetMs,
+        heldBeats,
+        requiredBeats: attempt.requiredBeats,
+        progress: attempt.sustainScored ? 1 : progress,
+      });
     }
-    setPressedNotes(new Set(heldSourcesRef.current.keys()));
+    setHeldNotes(next);
   }, []);
+
+  const clearPlayerNoteAttempts = useCallback(() => {
+    clearNoteClaims(
+      playerNoteAttemptsRef.current,
+      playerNoteIdBySourceRef.current,
+    );
+    setHeldNotes(new Map());
+  }, []);
+
+  const cancelPlayerAttemptsForSourcePrefix = useCallback(
+    (sourcePrefix: string) => {
+      let changed = false;
+      for (const [sourceId, noteId] of playerNoteIdBySourceRef.current) {
+        if (!sourceId.startsWith(sourcePrefix)) continue;
+        playerNoteIdBySourceRef.current.delete(sourceId);
+        playerNoteAttemptsRef.current.delete(noteId);
+        changed = true;
+      }
+      if (changed) publishHeldNotes();
+    },
+    [publishHeldNotes],
+  );
+
+  const releaseHeldSources = useCallback(
+    (sourcePrefix: string) => {
+      cancelPlayerAttemptsForSourcePrefix(sourcePrefix);
+      for (const [midiNote, sources] of heldSourcesRef.current) {
+        for (const sourceId of [...sources]) {
+          if (!sourceId.startsWith(sourcePrefix)) continue;
+          synthRef.current?.noteOff(sourceId, undefined, 0.04);
+          sources.delete(sourceId);
+        }
+        if (sources.size === 0) heldSourcesRef.current.delete(midiNote);
+      }
+      setPressedNotes(new Set(heldSourcesRef.current.keys()));
+    },
+    [cancelPlayerAttemptsForSourcePrefix],
+  );
 
   const releaseMIDINotes = useCallback(() => {
     releaseHeldSources("midi:");
@@ -834,16 +1020,19 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   const clearAttempt = useCallback(
     (preservePower: boolean) => {
+      clearPlayerNoteAttempts();
       resultsRef.current = new Map();
       setNoteResults(new Map());
       setLatestFeedback(null);
       setFeedbackEvents([]);
+      setLatestSustainFeedback(null);
+      setSustainFeedbackEvents([]);
       chordScoreMultipliersRef.current.clear();
       scoreRef.current = EMPTY_SCORE;
       setScore(EMPTY_SCORE);
       if (!preservePower) resetPower();
     },
-    [resetPower],
+    [clearPlayerNoteAttempts, resetPower],
   );
 
   const resetScore = useCallback(() => clearAttempt(false), [clearAttempt]);
@@ -854,6 +1043,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   const pause = useCallback(() => {
     if (midiCalibrationRef.current.active) cancelMIDICalibration();
+    clearPlayerNoteAttempts();
     const wasFinishing = isFinishingRef.current;
     isPlayingRef.current = false;
     isFinishingRef.current = false;
@@ -876,6 +1066,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     stopBackingBand(true);
   }, [
     cancelMIDICalibration,
+    clearPlayerNoteAttempts,
     finishPower,
     stopBackingBand,
     stopListenVoices,
@@ -924,6 +1115,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const destination = clamp(beat, 0, song.durationBeats);
       const movedToNewBeat =
         Math.abs(destination - positionRef.current) > 0.000_001;
+      clearPlayerNoteAttempts();
       stopListenVoices();
       stopBackingBand(true);
       isFinishingRef.current = false;
@@ -943,6 +1135,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     [
       commitPosition,
       cancelMIDICalibration,
+      clearPlayerNoteAttempts,
       resetScore,
       song.durationBeats,
       stopBackingBand,
@@ -963,11 +1156,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   );
 
   const registerResult = useCallback(
-    (result: NoteResult) => {
-      if (settingsRef.current.practiceMode === "listen") return;
+    (result: NoteResult): NoteFeedback | null => {
+      if (settingsRef.current.practiceMode === "listen") return null;
       // Song-note ids are stable across the result map. This guard also makes
       // RAF misses racing a physical chord incapable of awarding twice.
-      if (resultsRef.current.has(result.id)) return;
+      if (resultsRef.current.has(result.id)) return null;
 
       const chordKey = powerChordKeyByNoteId.get(result.id);
       const multiplier = chordKey
@@ -1000,6 +1193,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         pointsAwarded = pointsForJudgement(result.grade, combo, multiplier);
         nextScore = {
           points: currentScore.points + pointsAwarded,
+          sustainPoints: currentScore.sustainPoints,
           combo,
           bestCombo: Math.max(currentScore.bestCombo, combo),
           hits,
@@ -1016,6 +1210,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const feedbackEvent: NoteFeedback = {
         ...result,
         id: `${result.id}:feedback-${feedbackSequenceRef.current}`,
+        sequence: feedbackSequenceRef.current,
         groupId: chordKey ?? result.id,
         pointsAwarded,
         multiplier,
@@ -1025,8 +1220,178 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       setFeedbackEvents((current) =>
         [...current, feedbackEvent].slice(-FEEDBACK_HISTORY_LIMIT),
       );
+      return feedbackEvent;
     },
     [commitPower, powerChordKeyByNoteId],
+  );
+
+  const removePlayerNoteAttempt = useCallback(
+    (noteId: string, publish = true) => {
+      const attempt = playerNoteAttemptsRef.current.get(noteId);
+      if (!attempt) return;
+      playerNoteAttemptsRef.current.delete(noteId);
+      if (playerNoteIdBySourceRef.current.get(attempt.sourceId) === noteId) {
+        playerNoteIdBySourceRef.current.delete(attempt.sourceId);
+      }
+      if (publish) publishHeldNotes();
+    },
+    [publishHeldNotes],
+  );
+
+  const registerSustainResult = useCallback(
+    (
+      attempt: ActivePlayerNoteAttempt,
+      releaseBeat: number,
+    ): SustainFeedback | null => {
+      if (attempt.sustainScored) return null;
+      const onsetResult = resultsRef.current.get(attempt.note.id);
+      if (!onsetResult || onsetResult.grade === "miss") return null;
+
+      const heldBeats = Math.max(
+        0,
+        Math.min(releaseBeat, attempt.note.startBeat + attempt.note.durationBeats) -
+          attempt.holdStartBeat,
+      );
+      const sustain = judgeSustain(
+        heldBeats,
+        attempt.requiredBeats,
+        attempt.multiplier,
+      );
+      attempt.sustainScored = true;
+
+      const updatedResult: NoteResult = { ...onsetResult, sustain };
+      resultsRef.current = new Map(resultsRef.current).set(
+        attempt.note.id,
+        updatedResult,
+      );
+      setNoteResults(resultsRef.current);
+
+      if (sustain.pointsAwarded > 0) {
+        const currentScore = scoreRef.current;
+        const nextScore: KeyboardHeroScore = {
+          ...currentScore,
+          points: currentScore.points + sustain.pointsAwarded,
+          sustainPoints:
+            currentScore.sustainPoints + sustain.pointsAwarded,
+        };
+        scoreRef.current = nextScore;
+        setScore(nextScore);
+      }
+
+      feedbackSequenceRef.current += 1;
+      const chordKey =
+        powerChordKeyByNoteId.get(attempt.note.id) ?? attempt.note.id;
+      const feedback: SustainFeedback = {
+        ...sustain,
+        id: `${attempt.note.id}:sustain-feedback-${feedbackSequenceRef.current}`,
+        noteId: attempt.note.id,
+        groupId: `${chordKey}:sustain`,
+        midi: attempt.note.midi,
+        sequence: feedbackSequenceRef.current,
+      };
+      setLatestSustainFeedback(feedback);
+      setSustainFeedbackEvents((current) =>
+        [...current, feedback].slice(-FEEDBACK_HISTORY_LIMIT),
+      );
+      return feedback;
+    },
+    [powerChordKeyByNoteId],
+  );
+
+  const registerEarlyReleaseMiss = useCallback(
+    (attempt: ActivePlayerNoteAttempt) => {
+      if (settingsRef.current.practiceMode === "wait") {
+        registerResult({
+          id: `extra-early-release-${attempt.note.id}-${performance.now().toFixed(1)}`,
+          midi: attempt.note.midi,
+          grade: "miss",
+          offsetMs: attempt.pressOffsetMs,
+          earlyCaptured: true,
+        });
+        return;
+      }
+      registerResult({
+        id: attempt.note.id,
+        midi: attempt.note.midi,
+        grade: "miss",
+        offsetMs: attempt.pressOffsetMs,
+        earlyCaptured: true,
+      });
+    },
+    [registerResult],
+  );
+
+  const resolvePlayerNoteAttemptsThrough = useCallback(
+    (throughBeat: number, millisecondsPerBeat: number) => {
+      let changed = false;
+      for (const [noteId, attempt] of [...playerNoteAttemptsRef.current]) {
+        const noteEnd = attempt.note.startBeat + attempt.note.durationBeats;
+        if (
+          (attempt.phase === "armed" ||
+            attempt.phase === "released-before-start") &&
+          throughBeat + 0.000_001 >= attempt.note.startBeat
+        ) {
+          if (attempt.phase === "released-before-start") {
+            registerEarlyReleaseMiss(attempt);
+            removePlayerNoteAttempt(noteId, false);
+            changed = true;
+            continue;
+          }
+
+          const onset = registerResult(
+            resultFor(attempt.note, attempt.pressOffsetMs, true),
+          );
+          if (!onset || onset.grade === "miss") {
+            removePlayerNoteAttempt(noteId, false);
+            changed = true;
+            continue;
+          }
+
+          const requirement = sustainRequirement(
+            attempt.note.durationBeats,
+            millisecondsPerBeat,
+          );
+          if (!requirement.eligible) {
+            removePlayerNoteAttempt(noteId, false);
+            changed = true;
+            continue;
+          }
+          attempt.phase = "holding";
+          attempt.holdStartBeat = Math.max(
+            attempt.note.startBeat,
+            attempt.pressBeat,
+          );
+          attempt.requiredBeats = requirement.requiredBeats;
+          attempt.multiplier = onset.multiplier;
+          changed = true;
+        }
+
+        if (attempt.phase !== "holding") continue;
+        const heldBeats = Math.max(0, throughBeat - attempt.holdStartBeat);
+        if (!attempt.sustainScored && heldBeats >= attempt.requiredBeats) {
+          registerSustainResult(
+            attempt,
+            attempt.holdStartBeat + attempt.requiredBeats,
+          );
+          changed = true;
+        }
+        if (throughBeat + 0.000_001 >= noteEnd) {
+          if (!attempt.sustainScored) registerSustainResult(attempt, noteEnd);
+          removePlayerNoteAttempt(noteId, false);
+          changed = true;
+        }
+      }
+      if (changed || playerNoteAttemptsRef.current.size > 0) {
+        publishHeldNotes(throughBeat);
+      }
+    },
+    [
+      publishHeldNotes,
+      registerEarlyReleaseMiss,
+      registerResult,
+      registerSustainResult,
+      removePlayerNoteAttempt,
+    ],
   );
 
   const noteOn = useCallback(
@@ -1056,31 +1421,99 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (
         settingsRef.current.practiceMode === "listen" ||
         !isPlayingRef.current ||
-        isFinishingRef.current ||
-        countInSecondsRef.current > 0
+        isFinishingRef.current
       ) {
         return;
       }
       const millisecondsPerBeat =
         60_000 / (song.bpm * settingsRef.current.tempoScale);
+      const isPreRoll = countInSecondsRef.current > 0;
+      const transportBeat = isPreRoll
+        ? preRollVisualBeatRef.current
+        : positionRef.current;
       const judgedBeat =
-        positionRef.current - settingsRef.current.latencyMs / millisecondsPerBeat;
-      const candidate = song.notes
-        .filter(
-          (note) =>
-            note.midi === midiNote &&
-            !resultsRef.current.has(note.id) &&
-            Math.abs(note.startBeat - judgedBeat) * millisecondsPerBeat <= 180,
-        )
-        .sort(
-          (a, b) =>
-            Math.abs(a.startBeat - judgedBeat) - Math.abs(b.startBeat - judgedBeat),
-        )[0];
+        transportBeat - settingsRef.current.latencyMs / millisecondsPerBeat;
+      if (isPreRoll) {
+        let replacedReleasedCapture = false;
+        for (const [noteId, attempt] of playerNoteAttemptsRef.current) {
+          if (
+            attempt.phase !== "released-before-start" ||
+            attempt.note.midi !== midiNote
+          ) {
+            continue;
+          }
+          removePlayerNoteAttempt(noteId, false);
+          replacedReleasedCapture = true;
+        }
+        if (replacedReleasedCapture) publishHeldNotes(judgedBeat);
+      }
+      const unavailableNoteIds = new Set<string>([
+        ...resultsRef.current.keys(),
+        ...playerNoteAttemptsRef.current.keys(),
+      ]);
+      const activeLoop = loopRef.current;
+      const candidateNotes = activeLoop.enabled
+        ? song.notes.filter((note) =>
+            noteWithinPlaybackRange(
+              note,
+              activeLoop.startBeat,
+              activeLoop.endBeat,
+            ),
+          )
+        : song.notes;
+      const candidate = findPressCandidate(
+        candidateNotes,
+        midiNote,
+        judgedBeat,
+        millisecondsPerBeat,
+        unavailableNoteIds,
+      );
 
       if (candidate) {
-        registerResult(
-          resultFor(candidate, (judgedBeat - candidate.startBeat) * millisecondsPerBeat),
+        const requirement = sustainRequirement(
+          candidate.note.durationBeats,
+          millisecondsPerBeat,
         );
+        const shouldArm = candidate.armed || isPreRoll;
+        if (shouldArm) {
+          const attempt: ActivePlayerNoteAttempt = {
+            note: candidate.note,
+            sourceId,
+            pressBeat: judgedBeat,
+            pressOffsetMs: candidate.offsetMs,
+            earlyCaptured: true,
+            phase: "armed",
+            holdStartBeat: candidate.note.startBeat,
+            requiredBeats: requirement.requiredBeats,
+            multiplier: 1,
+            sustainScored: false,
+          };
+          playerNoteAttemptsRef.current.set(candidate.note.id, attempt);
+          playerNoteIdBySourceRef.current.set(sourceId, candidate.note.id);
+          publishHeldNotes(judgedBeat);
+          return;
+        }
+
+        const onset = registerResult(
+          resultFor(candidate.note, candidate.offsetMs),
+        );
+        if (onset && onset.grade !== "miss" && requirement.eligible) {
+          const attempt: ActivePlayerNoteAttempt = {
+            note: candidate.note,
+            sourceId,
+            pressBeat: judgedBeat,
+            pressOffsetMs: candidate.offsetMs,
+            earlyCaptured: false,
+            phase: "holding",
+            holdStartBeat: Math.max(candidate.note.startBeat, judgedBeat),
+            requiredBeats: requirement.requiredBeats,
+            multiplier: onset.multiplier,
+            sustainScored: false,
+          };
+          playerNoteAttemptsRef.current.set(candidate.note.id, attempt);
+          playerNoteIdBySourceRef.current.set(sourceId, candidate.note.id);
+          publishHeldNotes(judgedBeat);
+        }
         if (
           settingsRef.current.practiceMode === "wait" &&
           settingsRef.current.backingBandEnabled &&
@@ -1098,7 +1531,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
             );
           }
         }
-      } else {
+      } else if (!isPreRoll) {
         registerResult({
           id: `extra-${sourceId}-${performance.now().toFixed(1)}`,
           midi: midiNote,
@@ -1107,17 +1540,65 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         });
       }
     },
-    [registerResult, song.bpm, song.notes, syncBackingBand, synth],
+    [
+      publishHeldNotes,
+      registerResult,
+      removePlayerNoteAttempt,
+      song.bpm,
+      song.notes,
+      syncBackingBand,
+      synth,
+    ],
   );
 
-  const noteOff = useCallback((midiNote: number, source = "manual") => {
-    const sourceId = `${source}:${midiNote}`;
-    synthRef.current?.noteOff(sourceId);
-    const held = heldSourcesRef.current.get(midiNote);
-    held?.delete(sourceId);
-    if (held?.size === 0) heldSourcesRef.current.delete(midiNote);
-    setPressedNotes(new Set(heldSourcesRef.current.keys()));
-  }, []);
+  const noteOff = useCallback(
+    (midiNote: number, source = "manual") => {
+      const sourceId = `${source}:${midiNote}`;
+      synthRef.current?.noteOff(sourceId);
+      const held = heldSourcesRef.current.get(midiNote);
+      held?.delete(sourceId);
+      if (held?.size === 0) heldSourcesRef.current.delete(midiNote);
+      setPressedNotes(new Set(heldSourcesRef.current.keys()));
+
+      const noteId = playerNoteIdBySourceRef.current.get(sourceId);
+      const attempt = noteId
+        ? playerNoteAttemptsRef.current.get(noteId)
+        : undefined;
+      if (!noteId || !attempt) return;
+
+      if (attempt.phase === "armed") {
+        if (countInSecondsRef.current > 0) {
+          attempt.phase = "released-before-start";
+          playerNoteIdBySourceRef.current.delete(sourceId);
+          publishHeldNotes(preRollVisualBeatRef.current);
+          return;
+        }
+        registerEarlyReleaseMiss(attempt);
+      } else if (
+        attempt.phase === "holding" &&
+        isPlayingRef.current &&
+        !isFinishingRef.current &&
+        settingsRef.current.practiceMode !== "listen"
+      ) {
+        const millisecondsPerBeat =
+          60_000 / (song.bpm * settingsRef.current.tempoScale);
+        const releaseBeat =
+          positionRef.current -
+          settingsRef.current.latencyMs / millisecondsPerBeat;
+        if (!attempt.sustainScored) {
+          registerSustainResult(attempt, releaseBeat);
+        }
+      }
+      removePlayerNoteAttempt(noteId);
+    },
+    [
+      publishHeldNotes,
+      registerEarlyReleaseMiss,
+      registerSustainResult,
+      removePlayerNoteAttempt,
+      song.bpm,
+    ],
+  );
 
   noteOnRef.current = noteOn;
   noteOffRef.current = noteOff;
@@ -1125,10 +1606,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const setTempoScale = useCallback((scale: number) => {
     if (countInSecondsRef.current > 0) return;
     backingBandFailedStepRef.current = null;
-    setSettings((current) => ({
-      ...current,
-      tempoScale: clamp(scale, 0.25, 1.25),
-    }));
+    const tempoScale = clamp(scale, 0.25, 1.25);
+    settingsRef.current = { ...settingsRef.current, tempoScale };
+    setSettings((current) => ({ ...current, tempoScale }));
   }, []);
 
   const setPracticeMode = useCallback(
@@ -1152,6 +1632,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       ) {
         resetPower();
       }
+      if (practiceMode !== settingsRef.current.practiceMode) {
+        clearPlayerNoteAttempts();
+      }
       settingsRef.current = { ...settingsRef.current, practiceMode };
       setSettings((current) => {
         const next = { ...current, practiceMode };
@@ -1160,7 +1643,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       });
       if (practiceMode === "listen" && !isPlayingRef.current) play();
     },
-    [play, resetPower, stopListenVoices],
+    [clearPlayerNoteAttempts, play, resetPower, stopListenVoices],
   );
 
   const setMetronomeEnabled = useCallback((metronomeEnabled: boolean) => {
@@ -1303,7 +1786,8 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     (inputId: string | null = null) => {
       releaseMIDINotes();
       clearMIDICalibrationCapture();
-      midiChannelRef.current = null;
+      const channel = midiPreferencesRef.current.channel;
+      midiChannelRef.current = channel;
       detectedMIDIChannelRef.current = null;
       midiCalibrationSnapshotRef.current = null;
       const calibration = inputId
@@ -1312,7 +1796,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       midiCalibrationRef.current = calibration;
       setMIDI((current) => ({
         ...current,
-        channel: null,
+        channel,
         detectedChannel: null,
         lastNote: null,
         lastMappedNote: null,
@@ -1335,6 +1819,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (midiCalibrationRef.current.active) cancelMIDICalibration();
       releaseMIDINotes();
       midiChannelRef.current = channel;
+      const preferences = { ...midiPreferencesRef.current, channel };
+      midiPreferencesRef.current = preferences;
+      persistMIDIPreferences(preferences);
       detectedMIDIChannelRef.current = null;
       const calibration = midiCalibrationRef.current;
       setMIDI((current) => ({
@@ -1351,6 +1838,61 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     [cancelMIDICalibration, releaseMIDINotes],
   );
 
+  const publishMIDITransportPress = useCallback(
+    (action: MIDITransportAction) => {
+      const now = performance.now();
+      const previous = lastMIDITransportPressRef.current;
+      if (
+        previous?.action === action &&
+        now - previous.time < MIDI_TRANSPORT_DEDUP_MS
+      ) {
+        return;
+      }
+
+      lastMIDITransportPressRef.current = { action, time: now };
+      const sequence = midiTransportSequenceRef.current + 1;
+      midiTransportSequenceRef.current = sequence;
+      setMIDI((current) => ({
+        ...current,
+        lastTransportEvent: { action, sequence },
+      }));
+    },
+    [],
+  );
+
+  const bindMIDITransportInput = useCallback(
+    (input: MIDIInputLike) => {
+      input.onmidimessage = (event) => {
+        if (midiTransportInputsRef.current.get(input.id) !== input) return;
+        const action = decodeMIDITransportPress(event.data);
+        if (action) publishMIDITransportPress(action);
+      };
+    },
+    [publishMIDITransportPress],
+  );
+
+  const rebindMIDITransportInputs = useCallback(
+    (inputs: MIDIInputLike[], selectedInputId: string | null) => {
+      const next = new Map(
+        inputs
+          .filter(
+            (input) =>
+              input.state === "connected" &&
+              input.id !== selectedInputId &&
+              isMIDITransportInput(input),
+          )
+          .map((input) => [input.id, input] as const),
+      );
+
+      for (const [id, input] of midiTransportInputsRef.current) {
+        if (next.get(id) !== input) input.onmidimessage = null;
+      }
+      midiTransportInputsRef.current = next;
+      next.forEach(bindMIDITransportInput);
+    },
+    [bindMIDITransportInput],
+  );
+
   const bindMIDIInput = useCallback((input: MIDIInputLike) => {
     input.onmidimessage = (event) => {
       if (
@@ -1358,6 +1900,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         selectedMIDIIdRef.current !== input.id
       ) {
         return;
+      }
+      if (isMIDITransportInput(input)) {
+        const action = decodeMIDITransportPress(event.data);
+        if (action) {
+          publishMIDITransportPress(action);
+          return;
+        }
       }
       const [status = 0, note = 0, velocity = 0] = event.data;
       const command = status & 0xf0;
@@ -1370,14 +1919,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const transpose = calibration.calibrated ? calibration.transpose : 0;
       const displayMappedNote = note + transpose;
       const lastMappedNote =
-        !calibration.needsVerification &&
         displayMappedNote >= 0 &&
         displayMappedNote <= 127
           ? displayMappedNote
           : null;
-      const mappedNote = calibration.needsVerification
-        ? null
-        : mapMIDINoteToKeyboardRange(note, transpose);
+      const mappedNote = mapMIDINoteToKeyboardRange(note, transpose);
       const messageKey = `${input.id}:ch${channel}:raw${note}`;
       setMIDI((current) => ({
         ...current,
@@ -1562,7 +2108,6 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           const next: KeyboardHeroMIDICalibrationState = {
             active: false,
             calibrated: true,
-            needsVerification: false,
             phase: "idle",
             rawNote: calibration.rawNote,
             rightRawNote: candidate.rawNote,
@@ -1606,6 +2151,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   }, [
     armMIDICalibrationTimer,
     clearMIDICalibrationCapture,
+    publishMIDITransportPress,
     setMIDICalibrationState,
   ]);
 
@@ -1619,15 +2165,29 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       manufacturer: input.manufacturer || "Unknown manufacturer",
       connected: input.state === "connected",
     }));
-    const selected = inputs.find(
-      (input) => input.id === selectedMIDIIdRef.current && input.state === "connected",
+    const preferredInputId = selectedMIDIIdRef.current;
+    const retainedInput = inputs.find(
+      (input) => input.id === preferredInputId && input.state === "connected",
     );
+    const selected =
+      retainedInput ??
+      (preferredInputId === null ? chooseAutomaticMIDIInput(inputs) : null);
+    if (selected && preferredInputId === null) {
+      selectedMIDIIdRef.current = selected.id;
+      const preferences = {
+        ...midiPreferencesRef.current,
+        preferredInputId: selected.id,
+      };
+      midiPreferencesRef.current = preferences;
+      persistMIDIPreferences(preferences);
+    }
     const previous = midiInputRef.current;
-    if (previous !== (selected ?? null)) {
+    if (previous !== selected) {
       if (previous) previous.onmidimessage = null;
       resetMIDIActivity(selected?.id ?? null);
     }
-    midiInputRef.current = selected ?? null;
+    midiInputRef.current = selected;
+    rebindMIDITransportInputs(inputs, selected?.id ?? null);
     if (selected) bindMIDIInput(selected);
     setMIDI((current) => ({
       ...current,
@@ -1635,7 +2195,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       selectedInputId: selected?.id ?? null,
       connectedName: selected?.name || null,
     }));
-  }, [bindMIDIInput, resetMIDIActivity]);
+  }, [bindMIDIInput, rebindMIDITransportInputs, resetMIDIActivity]);
 
   const selectMIDIInput = useCallback(
     (inputId: string | null) => {
@@ -1644,7 +2204,8 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (previous) {
         previous.onmidimessage = null;
       }
-      const input = Array.from(midiAccessRef.current?.inputs.values() ?? []).find(
+      const inputs = Array.from(midiAccessRef.current?.inputs.values() ?? []);
+      const input = inputs.find(
         (candidate) => candidate.id === inputId && candidate.state === "connected",
       );
       if (inputChanged) {
@@ -1652,7 +2213,16 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       }
       selectedMIDIIdRef.current = inputId;
       midiInputRef.current = input ?? null;
+      rebindMIDITransportInputs(inputs, input?.id ?? null);
       if (input) bindMIDIInput(input);
+      if (input || inputId === null) {
+        const preferences = {
+          ...midiPreferencesRef.current,
+          preferredInputId: input?.id ?? null,
+        };
+        midiPreferencesRef.current = preferences;
+        persistMIDIPreferences(preferences);
+      }
       setMIDI((current) => ({
         ...current,
         selectedInputId: input?.id ?? null,
@@ -1660,88 +2230,95 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         error: inputId && !input ? "That MIDI input is no longer connected." : null,
       }));
     },
-    [bindMIDIInput, resetMIDIActivity],
+    [bindMIDIInput, rebindMIDITransportInputs, resetMIDIActivity],
   );
 
-  const connectMIDI = useCallback(async () => {
-    const requestMIDIAccess = (navigator as MIDIEnabledNavigator).requestMIDIAccess;
-    if (!requestMIDIAccess) {
-      setMIDI((current) => ({
-        ...current,
-        supported: false,
-        permission: "unsupported",
-        error: "Web MIDI is not supported in this browser.",
-      }));
-      return;
+  const connectMIDI = useCallback((): Promise<void> => {
+    if (midiConnectionPromiseRef.current) {
+      return midiConnectionPromiseRef.current;
     }
-    setMIDI((current) => ({ ...current, permission: "prompt", error: null }));
-    try {
-      const access = await requestMIDIAccess.call(navigator, { sysex: false });
-      midiAccessRef.current = access;
-      access.onstatechange = refreshMIDIInputs;
-      setMIDI((current) => ({
-        ...current,
-        supported: true,
-        permission: "granted",
-        error: null,
-      }));
-      refreshMIDIInputs();
-      const connectedInputs = Array.from(access.inputs.values()).filter(
-        (input) => input.state === "connected",
-      );
-      const retainedInput = connectedInputs.find(
-        (input) => input.id === selectedMIDIIdRef.current,
-      );
-      const inputName = (input: MIDIInputLike) =>
-        input.name?.trim().toLowerCase() ?? "";
-      const isControlPort = (input: MIDIInputLike) =>
-        /\b(daw|plugin|software control|control|din)\b/i.test(inputName(input));
-      const officialMPKInput = connectedInputs.find(
-        (input) =>
-          !isControlPort(input) &&
-          inputName(input).endsWith("mpk mini iv midi port"),
-      );
-      const exactMPKInput = connectedInputs.find(
-        (input) => inputName(input) === "mpk mini iv",
-      );
-      const performanceMPKInput = connectedInputs.find((input) => {
-        const name = inputName(input);
-        return (
-          !isControlPort(input) &&
-          (name.includes("mpk mini iv") || name.includes("mpk mini 4"))
-        );
-      });
-      const nonControlInput = connectedInputs.find(
-        (input) => !isControlPort(input),
-      );
-      const preferredInput =
-        retainedInput ??
-        officialMPKInput ??
-        exactMPKInput ??
-        performanceMPKInput ??
-        nonControlInput;
-      if (preferredInput) selectMIDIInput(preferredInput.id);
-    } catch (error) {
-      setMIDI((current) => ({
-        ...current,
-        permission: "denied",
-        error:
-          error instanceof Error
-            ? error.message
-            : "MIDI access was denied. Check the browser site permission.",
-      }));
-    }
-  }, [refreshMIDIInputs, selectMIDIInput]);
+
+    const connection = (async () => {
+      const requestMIDIAccess = (navigator as MIDIEnabledNavigator)
+        .requestMIDIAccess;
+      if (!requestMIDIAccess) {
+        setMIDI((current) => ({
+          ...current,
+          supported: false,
+          permission: "unsupported",
+          error: "Web MIDI is not supported in this browser.",
+        }));
+        return;
+      }
+      if (!midiAccessRef.current) {
+        setMIDI((current) => ({
+          ...current,
+          permission: "prompt",
+          error: null,
+        }));
+      }
+      try {
+        const access =
+          midiAccessRef.current ??
+          (await requestMIDIAccess.call(navigator, { sysex: false }));
+        if (!midiHookActiveRef.current) return;
+        midiAccessRef.current = access;
+        access.onstatechange = refreshMIDIInputs;
+        setMIDI((current) => ({
+          ...current,
+          supported: true,
+          permission: "granted",
+          error: null,
+        }));
+        refreshMIDIInputs();
+      } catch (error) {
+        if (!midiHookActiveRef.current) return;
+        setMIDI((current) => ({
+          ...current,
+          permission: "denied",
+          error:
+            error instanceof Error
+              ? error.message
+              : "MIDI access was denied. Check the browser site permission.",
+        }));
+      }
+    })();
+
+    midiConnectionPromiseRef.current = connection;
+    void connection.then(
+      () => {
+        if (midiConnectionPromiseRef.current === connection) {
+          midiConnectionPromiseRef.current = null;
+        }
+      },
+      () => {
+        if (midiConnectionPromiseRef.current === connection) {
+          midiConnectionPromiseRef.current = null;
+        }
+      },
+    );
+    return connection;
+  }, [refreshMIDIInputs]);
 
   useEffect(() => {
+    midiHookActiveRef.current = true;
     setSettings(readSettings());
+    const preferences = readMIDIPreferences();
+    midiPreferencesRef.current = preferences;
+    selectedMIDIIdRef.current = preferences.preferredInputId;
+    midiChannelRef.current = preferences.channel;
+    const supported =
+      typeof (navigator as MIDIEnabledNavigator).requestMIDIAccess === "function";
     setMIDI((current) => ({
       ...current,
-      supported:
-        typeof (navigator as MIDIEnabledNavigator).requestMIDIAccess ===
-        "function",
+      supported,
+      channel: preferences.channel,
     }));
-  }, []);
+    if (supported && !autoMIDIConnectAttemptedRef.current) {
+      autoMIDIConnectAttemptedRef.current = true;
+      void connectMIDI();
+    }
+  }, [connectMIDI]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -1807,6 +2384,8 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const deltaSeconds = Math.min(0.1, Math.max(0, (now - previousTime) / 1000));
       previousTime = now;
       const currentSettings = settingsRef.current;
+      const millisecondsPerBeat =
+        60_000 / (song.bpm * currentSettings.tempoScale);
       const beatsAdvanced =
         deltaSeconds * (song.bpm * currentSettings.tempoScale) / 60;
 
@@ -1858,6 +2437,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         setVisualBeat(nextVisualBeat);
         setCountdown(remainingSeconds > 0 ? afterDisplay : null);
         if (remainingSeconds === 0) {
+          resolvePlayerNoteAttemptsThrough(0, millisecondsPerBeat);
           const loopAtStart = loopRef.current;
           const waitIsBlockedAtZero =
             currentSettings.practiceMode === "wait" &&
@@ -1885,11 +2465,16 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (currentSettings.practiceMode === "wait") {
         const blockingBeat = song.notes
           .filter(
-            (note) =>
-              !resultsRef.current.has(note.id) &&
-              note.startBeat < loopEnd - 0.000_001 &&
-              note.startBeat >= oldBeat - 0.001 &&
-              note.startBeat <= nextBeat + 0.001,
+            (note) => {
+              const attempt = playerNoteAttemptsRef.current.get(note.id);
+              return (
+                !resultsRef.current.has(note.id) &&
+                attempt?.phase !== "armed" &&
+                note.startBeat < loopEnd - 0.000_001 &&
+                note.startBeat >= oldBeat - 0.001 &&
+                note.startBeat <= nextBeat + 0.001
+              );
+            },
           )
           .reduce<number | null>(
             (minimum, note) =>
@@ -1902,11 +2487,21 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         }
       }
 
+      resolvePlayerNoteAttemptsThrough(
+        Math.min(nextBeat, loopEnd),
+        millisecondsPerBeat,
+      );
+
       if (currentSettings.practiceMode === "flow") {
-        const millisecondsPerBeat = 60_000 / (song.bpm * currentSettings.tempoScale);
         const missed = song.notes.filter(
           (note) =>
             !resultsRef.current.has(note.id) &&
+            (!activeLoop.enabled ||
+              noteWithinPlaybackRange(
+                note,
+                activeLoop.startBeat,
+                activeLoop.endBeat,
+              )) &&
             note.startBeat >= oldBeat - 0.5 &&
             nextBeat - note.startBeat > 180 / millisecondsPerBeat,
         );
@@ -1953,9 +2548,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           }
           lastMetronomeBeatRef.current = null;
         } else {
+          resolvePlayerNoteAttemptsThrough(
+            song.durationBeats,
+            millisecondsPerBeat,
+          );
           if (currentSettings.practiceMode === "flow") {
-            const millisecondsPerBeat =
-              60_000 / (song.bpm * currentSettings.tempoScale);
             for (const note of song.notes) {
               if (resultsRef.current.has(note.id)) continue;
               registerResult({
@@ -2011,6 +2608,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     pause,
     playMetronomeSafely,
     registerResult,
+    resolvePlayerNoteAttemptsThrough,
     resetAttemptForLoop,
     resetScore,
     song,
@@ -2022,7 +2620,12 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   useEffect(
     () => () => {
+      midiHookActiveRef.current = false;
       if (midiInputRef.current) midiInputRef.current.onmidimessage = null;
+      midiTransportInputsRef.current.forEach((input) => {
+        input.onmidimessage = null;
+      });
+      midiTransportInputsRef.current.clear();
       if (midiAccessRef.current) midiAccessRef.current.onstatechange = null;
       if (midiCalibrationTimeoutRef.current !== null) {
         clearTimeout(midiCalibrationTimeoutRef.current);
@@ -2059,6 +2662,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     noteResults,
     latestFeedback,
     feedbackEvents,
+    heldNotes,
+    latestSustainFeedback,
+    sustainFeedbackEvents,
     score,
     power,
     midi,

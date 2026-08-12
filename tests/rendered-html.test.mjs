@@ -42,6 +42,8 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /Band mix/);
   assert.match(html, /Intensity/);
   assert.match(html, /Practice mode/);
+  assert.match(html, /Open the training room/);
+  assert.match(html, /Six slow, repeatable steps from finger placement to Fr.re Jacques/);
   assert.match(html, /Three-dimensional 25-key practice keyboard/);
   assert.match(html, /PLAY HERE/);
   assert.match(html, /Stage score/);
@@ -54,8 +56,43 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
+test("ships the guided beginner training room and slow-practice controls", async () => {
+  const [page, training, trainingArea, appCss, songs] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/training.ts", import.meta.url), "utf8"),
+    readFile(new URL("../components/TrainingArea.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../lib/songs.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /<TrainingLauncher/);
+  assert.match(page, /<TrainingRoom/);
+  assert.match(page, /<TrainingCoach/);
+  assert.match(page, /getNextTrainingLanding/);
+  assert.match(page, /setTrainingProgress/);
+  assert.match(page, /prepareTrainingSection\(activeTrainingSection, "listen", true\)/);
+  assert.match(page, /setBackingBandForTraining\(false\)/);
+  assert.match(training, /export const TRAINING_LESSONS/);
+  assert.match(training, /title: "Right-Hand Home"/);
+  assert.match(training, /title: "Left-Hand Home"/);
+  assert.match(training, /title: "Hands Take Turns"/);
+  assert.match(training, /title: "First Two-Hand Landing"/);
+  assert.match(training, /title: "Build a C Chord"/);
+  assert.match(training, /title: "Fr.re, Unknotted"/);
+  assert.match(trainingArea, /Hear it slowly/);
+  assert.match(trainingArea, /Find the notes/);
+  assert.match(trainingArea, /Keep the pulse/);
+  assert.match(trainingArea, /Finger 1 is always your thumb/);
+  assert.match(trainingArea, /Clean loops/);
+  assert.match(appCss, /\.training-room-modal/);
+  assert.match(appCss, /\.training-finger-key\.is-target/);
+  assert.match(appCss, /\.coach-panel\.is-training/);
+  assert.match(songs, /id: "canon-entry-a"/);
+  assert.match(songs, /id: "left-finish-b"/);
+});
+
 test("ships the finished game rather than starter assets", async () => {
-  const [page, appCss, layout, packageJson, songs, stage, stageCss, results, report, engine] = await Promise.all([
+  const [page, appCss, layout, packageJson, songs, stage, stageCss, results, report, engine, midiInputs] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -66,10 +103,13 @@ test("ships the finished game rather than starter assets", async () => {
     readFile(new URL("../components/PerformanceResults.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/performanceReport.ts", import.meta.url), "utf8"),
     readFile(new URL("../hooks/useKeyboardHeroCore.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/midiInputs.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /useKeyboardHeroCore/);
   assert.match(page, /<KeyboardStage/);
+  assert.match(page, /Reconnect MIDI/);
+  assert.match(page, /hero\.midi\.permission === "prompt"/);
   assert.match(page, /currentBeat=\{hero\.visualBeat\}/);
   assert.match(page, /First note hits the bright bar at zero/);
   assert.match(page, /hero\.feedbackEvents\.map/);
@@ -84,6 +124,10 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /hero\.startMIDICalibration/);
   assert.match(page, /hero\.cancelMIDICalibration/);
   assert.match(page, /hero\.resetMIDICalibration/);
+  assert.match(page, /hero\.midi\.lastTransportEvent/);
+  assert.match(page, /resolveMIDITransportIntent/);
+  assert.match(page, /intent === "replay"/);
+  assert.match(page, /intent === "back-to-practice"/);
   assert.match(page, /Press the physical leftmost key/);
   assert.match(page, /physical rightmost key/);
   assert.match(page, /Try again/);
@@ -102,7 +146,10 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /returnFocus\.focus\(\{ preventScroll: true \}\)/);
   assert.match(page, /const openLibrary = useCallback/);
   assert.match(page, /pauseForLibrary\(\);[\s\S]*?setLibraryOpen\(true\)/);
-  assert.match(page, /if \(libraryOpen \|\| songComplete\) return/);
+  assert.match(
+    page,
+    /if \(libraryOpen \|\| trainingOpen \|\| songComplete\) return/,
+  );
   assert.match(page, /onClick=\{openLibrary\}/);
   assert.match(page, /hero\.power\.active/);
   assert.match(page, /power=\{hero\.power\}/);
@@ -157,6 +204,24 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /data-power-mode/);
   assert.match(stage, /motionQuery\.addEventListener\("change"/);
   assert.match(stage, /motionQuery\.removeEventListener\("change"/);
+  assert.match(stage, /holdProgress\?: number/);
+  assert.match(stage, /const AIM_RENDER_ORDER = 1200/);
+  assert.match(stage, /held-aim-white-ring/);
+  assert.match(stage, /held-aim-sparks/);
+  assert.match(stage, /depthTest: false/);
+  assert.match(stage, /group\.position\.set\(key\.x, 0\.19, HIT_Z\)/);
+  assert.match(stage, /whiteRing\.renderOrder = AIM_RENDER_ORDER \+ 2/);
+  assert.match(stage, /sparks\.renderOrder = AIM_RENDER_ORDER \+ 4/);
+  assert.match(stage, /marker\.group\.visible = active/);
+  assert.match(stage, /pressedNow && !missed && note\.state === "active"/);
+  assert.match(stage, /matchedHoldStrength/);
+  assert.match(stage, /reduceMotion[\s\S]*?0\.82/);
+  assert.match(stage, /makeRoundedNoteGeometry/);
+  assert.match(stage, /bevelEnabled: true/);
+  assert.match(stage, /nextNoteStartRef/);
+  assert.match(stage, /const separationGap/);
+  assert.match(stage, /headCap/);
+  assert.match(stage, /tailCap/);
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
   assert.match(stageCss, /\.kh-stage--power/);
   assert.match(stageCss, /kh-stage-power-breathe/);
@@ -164,6 +229,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(results, /performance-results-overlay/);
   assert.match(results, /results-test-score/);
   assert.match(results, /AnimatedNumber/);
+  assert.match(results, /Play it again/);
+  assert.match(results, /Back to practice/);
   assert.match(results, /prefers-reduced-motion: reduce/);
   assert.match(results, /dialogRef\.current\?\.focus/);
   assert.match(results, /createPortal/);
@@ -171,8 +238,20 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(report, /TIMING_WEIGHTS/);
   assert.match(report, /extraMisses/);
   assert.match(engine, /requestMIDIAccess/);
-  assert.match(engine, /mpk mini iv midi port/);
-  assert.match(engine, /officialMPKInput/);
+  assert.match(engine, /midiTransportInputsRef/);
+  assert.match(engine, /rebindMIDITransportInputs/);
+  assert.match(engine, /decodeMIDITransportPress/);
+  assert.match(engine, /keyboard-hero\.midi-preferences\.v1/);
+  assert.match(engine, /persistMIDIPreferences/);
+  assert.match(engine, /autoMIDIConnectAttemptedRef/);
+  assert.match(engine, /void connectMIDI\(\)/);
+  assert.match(
+    engine,
+    /preferredInputId === null \? chooseAutomaticMIDIInput\(inputs\) : null/,
+  );
+  assert.match(engine, /midiHookActiveRef/);
+  assert.match(midiInputs, /mpk mini iv midi port/);
+  assert.match(midiInputs, /officialMPKInput/);
   assert.match(engine, /detectedChannel/);
   assert.match(engine, /export type MIDICalibrationPhase/);
   assert.match(engine, /lastMappedNote/);
@@ -182,6 +261,11 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /backingBandMix/);
   assert.match(engine, /backingBandIntensity/);
   assert.match(engine, /mapMIDINoteToKeyboardRange/);
+  assert.match(
+    engine,
+    /const saved = parseMIDICalibrationMapping[\s\S]*?if \(!saved\)[\s\S]*?calibrated: true/,
+  );
+  assert.doesNotMatch(engine, /needsVerification/);
   assert.match(engine, /midi:\$\{input\.id\}:ch\$\{channel\}/);
   assert.match(engine, /const PRE_ROLL_SECONDS = 5/);
   assert.match(engine, /const POST_ROLL_MIN_SECONDS = 2\.5/);
@@ -195,7 +279,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /groupId/);
   assert.match(engine, /practiceMode === "listen" && !isPlayingRef\.current\) play\(\)/);
   assert.match(engine, /reconcileScheduledVoices/);
-  assert.match(engine, /tempoScale: clamp\(scale, 0\.25, 1\.25\)/);
+  assert.match(engine, /const tempoScale = clamp\(scale, 0\.25, 1\.25\)/);
 
   await access(new URL("../public/og-rock-v2.png", import.meta.url));
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
