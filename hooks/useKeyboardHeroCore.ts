@@ -180,6 +180,8 @@ export interface KeyboardHeroSettings {
 
 export interface KeyboardHeroBackingBandState {
   active: boolean;
+  /** True while the independent free-play groove is running. */
+  isJamming: boolean;
   /** Normalized live pulse for visual meters. */
   energy: number;
 }
@@ -216,6 +218,8 @@ export interface KeyboardHeroCore {
   backingBand: KeyboardHeroBackingBandState;
   settings: KeyboardHeroSettings;
   loop: KeyboardHeroLoop;
+  /** Full-song, unscored practice that restarts immediately at the end. */
+  quickLoopEnabled: boolean;
   togglePlay: () => void;
   play: () => void;
   pause: () => void;
@@ -229,9 +233,14 @@ export interface KeyboardHeroCore {
   setBackingBandEnabled: (enabled: boolean) => void;
   setBackingBandMix: (mix: number) => void;
   setBackingBandIntensity: (intensity: number) => void;
+  playBackingBand: () => void;
+  pauseBackingBand: () => void;
+  toggleBackingBandPlayback: () => void;
   setLatencyMs: (latencyMs: number) => void;
   setLoop: (startBeat: number, endBeat: number, enabled?: boolean) => void;
   toggleLoop: () => void;
+  setQuickLoopEnabled: (enabled: boolean) => void;
+  toggleQuickLoop: () => void;
   connectMIDI: () => Promise<void>;
   selectMIDIInput: (inputId: string | null) => void;
   setMIDIChannel: (channel: number | null) => void;
@@ -561,6 +570,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   );
   const [backingBand, setBackingBand] = useState<KeyboardHeroBackingBandState>({
     active: false,
+    isJamming: false,
     energy: 0,
   });
   const [loop, setLoopState] = useState<KeyboardHeroLoop>({
@@ -568,6 +578,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     startBeat: 0,
     endBeat: song.durationBeats,
   });
+  const [quickLoopEnabled, setQuickLoopEnabledState] = useState(false);
   const [midi, setMIDI] = useState<KeyboardHeroMIDIState>(() => ({
     // Keep the server and first browser render identical. Capability detection
     // runs after hydration so unsupported-browser guidance never mismatches.
@@ -636,6 +647,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const settingsRef = useRef(settings);
   const settingsReadyRef = useRef(false);
   const loopRef = useRef(loop);
+  const quickLoopEnabledRef = useRef(false);
   const isPlayingRef = useRef(false);
   const isFinishingRef = useRef(false);
   const postRollStartTimeRef = useRef(0);
@@ -660,6 +672,8 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   } | null>(null);
   const backingBandActiveRef = useRef(false);
   const backingBandFailedStepRef = useRef<number | null>(null);
+  const backingBandJamBeatRef = useRef(0);
+  const backingBandJammingRef = useRef(false);
 
   const synth = useCallback((): KeyboardSynth => {
     if (!synthRef.current) {
@@ -937,7 +951,16 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       current.active === active &&
       Math.abs(current.energy - normalizedEnergy) < 0.005
         ? current
-        : { active, energy: normalizedEnergy },
+        : { ...current, active, energy: normalizedEnergy },
+    );
+  }, []);
+
+  const setBackingBandJamming = useCallback((isJamming: boolean) => {
+    backingBandJammingRef.current = isJamming;
+    setBackingBand((current) =>
+      current.isJamming === isJamming
+        ? current
+        : { ...current, isJamming },
     );
   }, []);
 
@@ -1075,6 +1098,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   const play = useCallback(() => {
     if (isPlayingRef.current) return;
     if (midiCalibrationRef.current.active) cancelMIDICalibration();
+    if (backingBandJammingRef.current) setBackingBandJamming(false);
     isFinishingRef.current = false;
     setIsFinishing(false);
     setSongComplete(false);
@@ -1105,9 +1129,52 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     resetScore,
     song.bpm,
     song.durationBeats,
+    setBackingBandJamming,
     stopBackingBand,
     synth,
   ]);
+
+  const pauseBackingBand = useCallback(() => {
+    if (!backingBandJammingRef.current) return;
+    setBackingBandJamming(false);
+    stopBackingBand(true);
+  }, [setBackingBandJamming, stopBackingBand]);
+
+  const playBackingBand = useCallback(() => {
+    if (backingBandJammingRef.current) return;
+    if (midiCalibrationRef.current.active) cancelMIDICalibration();
+    if (isPlayingRef.current) {
+      const handoffBeat = positionRef.current;
+      pause();
+      backingBandJamBeatRef.current =
+        handoffBeat >= song.durationBeats ? 0 : handoffBeat;
+    }
+    if (!settingsRef.current.backingBandEnabled) {
+      setSettings((current) => {
+        const next = { ...current, backingBandEnabled: true };
+        settingsRef.current = next;
+        return next;
+      });
+    }
+    if (backingBandJamBeatRef.current >= song.durationBeats) {
+      backingBandJamBeatRef.current = 0;
+    }
+    stopBackingBand(true);
+    setBackingBandJamming(true);
+    void synth().resume();
+  }, [
+    cancelMIDICalibration,
+    pause,
+    setBackingBandJamming,
+    song.durationBeats,
+    stopBackingBand,
+    synth,
+  ]);
+
+  const toggleBackingBandPlayback = useCallback(() => {
+    if (backingBandJammingRef.current) pauseBackingBand();
+    else playBackingBand();
+  }, [pauseBackingBand, playBackingBand]);
 
   const seekBeat = useCallback(
     (beat: number) => {
@@ -1163,46 +1230,52 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       if (resultsRef.current.has(result.id)) return null;
 
       const chordKey = powerChordKeyByNoteId.get(result.id);
-      const multiplier = chordKey
-        ? latchChordScoreMultiplier(
-            chordScoreMultipliersRef.current,
-            chordKey,
-            powerRef.current.multiplier,
-          )
-        : 1;
-      const powerOutcome = applyPowerJudgement(
-        powerRef.current,
-        result.grade,
-      );
-      commitPower(powerOutcome.state);
-
-      const currentScore = scoreRef.current;
-      let nextScore: KeyboardHeroScore;
+      const scoringEnabled = !quickLoopEnabledRef.current;
+      const multiplier =
+        scoringEnabled && chordKey
+          ? latchChordScoreMultiplier(
+              chordScoreMultipliersRef.current,
+              chordKey,
+              powerRef.current.multiplier,
+            )
+          : 1;
       let pointsAwarded = 0;
-      if (result.grade === "miss") {
-        const misses = currentScore.misses + 1;
-        nextScore = {
-          ...currentScore,
-          combo: 0,
-          misses,
-          accuracy: scoreAccuracy(currentScore.hits, misses),
-        };
-      } else {
-        const combo = currentScore.combo + 1;
-        const hits = currentScore.hits + 1;
-        pointsAwarded = pointsForJudgement(result.grade, combo, multiplier);
-        nextScore = {
-          points: currentScore.points + pointsAwarded,
-          sustainPoints: currentScore.sustainPoints,
-          combo,
-          bestCombo: Math.max(currentScore.bestCombo, combo),
-          hits,
-          misses: currentScore.misses,
-          accuracy: scoreAccuracy(hits, currentScore.misses),
-        };
+      let powerActivation = false;
+      if (scoringEnabled) {
+        const powerOutcome = applyPowerJudgement(
+          powerRef.current,
+          result.grade,
+        );
+        commitPower(powerOutcome.state);
+        powerActivation = powerOutcome.activated;
+
+        const currentScore = scoreRef.current;
+        let nextScore: KeyboardHeroScore;
+        if (result.grade === "miss") {
+          const misses = currentScore.misses + 1;
+          nextScore = {
+            ...currentScore,
+            combo: 0,
+            misses,
+            accuracy: scoreAccuracy(currentScore.hits, misses),
+          };
+        } else {
+          const combo = currentScore.combo + 1;
+          const hits = currentScore.hits + 1;
+          pointsAwarded = pointsForJudgement(result.grade, combo, multiplier);
+          nextScore = {
+            points: currentScore.points + pointsAwarded,
+            sustainPoints: currentScore.sustainPoints,
+            combo,
+            bestCombo: Math.max(currentScore.bestCombo, combo),
+            hits,
+            misses: currentScore.misses,
+            accuracy: scoreAccuracy(hits, currentScore.misses),
+          };
+        }
+        scoreRef.current = nextScore;
+        setScore(nextScore);
       }
-      scoreRef.current = nextScore;
-      setScore(nextScore);
 
       resultsRef.current = new Map(resultsRef.current).set(result.id, result);
       setNoteResults(resultsRef.current);
@@ -1214,7 +1287,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         groupId: chordKey ?? result.id,
         pointsAwarded,
         multiplier,
-        powerActivation: powerOutcome.activated,
+        powerActivation,
       };
       setLatestFeedback(feedbackEvent);
       setFeedbackEvents((current) =>
@@ -1252,11 +1325,14 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         Math.min(releaseBeat, attempt.note.startBeat + attempt.note.durationBeats) -
           attempt.holdStartBeat,
       );
-      const sustain = judgeSustain(
+      const judgedSustain = judgeSustain(
         heldBeats,
         attempt.requiredBeats,
         attempt.multiplier,
       );
+      const sustain = quickLoopEnabledRef.current
+        ? { ...judgedSustain, pointsAwarded: 0 }
+        : judgedSustain;
       attempt.sustainScored = true;
 
       const updatedResult: NoteResult = { ...onsetResult, sustain };
@@ -1667,9 +1743,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         settingsRef.current = next;
         return next;
       });
-      if (!backingBandEnabled) stopBackingBand(true);
+      if (!backingBandEnabled) {
+        backingBandJamBeatRef.current = 0;
+        setBackingBandJamming(false);
+        stopBackingBand(true);
+      }
     },
-    [stopBackingBand],
+    [setBackingBandJamming, stopBackingBand],
   );
 
   const setBackingBandMix = useCallback((mix: number) => {
@@ -1706,6 +1786,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const start = clamp(startBeat, 0, Math.max(0, song.durationBeats - 0.25));
       const end = clamp(endBeat, start + 0.25, song.durationBeats);
       const nextLoop = { enabled, startBeat: start, endBeat: end };
+      if (enabled && quickLoopEnabledRef.current) {
+        quickLoopEnabledRef.current = false;
+        setQuickLoopEnabledState(false);
+      }
       stopBackingBand(true);
       loopRef.current = nextLoop;
       setLoopState(nextLoop);
@@ -1720,6 +1804,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     if (midiCalibrationRef.current.active) cancelMIDICalibration();
     const current = loopRef.current;
     const nextLoop = { ...current, enabled: !current.enabled };
+    if (nextLoop.enabled && quickLoopEnabledRef.current) {
+      quickLoopEnabledRef.current = false;
+      setQuickLoopEnabledState(false);
+    }
     stopBackingBand(true);
     loopRef.current = nextLoop;
     setLoopState(nextLoop);
@@ -1731,6 +1819,28 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       seekBeat(nextLoop.startBeat);
     }
   }, [cancelMIDICalibration, seekBeat, stopBackingBand]);
+
+  const setQuickLoopEnabled = useCallback(
+    (enabled: boolean) => {
+      if (midiCalibrationRef.current.active) cancelMIDICalibration();
+      quickLoopEnabledRef.current = enabled;
+      setQuickLoopEnabledState(enabled);
+      if (!enabled) return;
+
+      if (loopRef.current.enabled) {
+        const nextLoop = { ...loopRef.current, enabled: false };
+        loopRef.current = nextLoop;
+        setLoopState(nextLoop);
+      }
+      resetScore();
+      setSongComplete(false);
+    },
+    [cancelMIDICalibration, resetScore],
+  );
+
+  const toggleQuickLoop = useCallback(() => {
+    setQuickLoopEnabled(!quickLoopEnabledRef.current);
+  }, [setQuickLoopEnabled]);
 
   const startMIDICalibration = useCallback(() => {
     if (!midiInputRef.current) {
@@ -2343,12 +2453,23 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   }, [noteResults]);
 
   useEffect(() => {
+    setBackingBandJamming(false);
+    backingBandJamBeatRef.current = 0;
+    stopBackingBand(true);
     pause();
     setSongComplete(false);
     commitPosition(0);
     resetScore();
     setLoopState({ enabled: false, startBeat: 0, endBeat: song.durationBeats });
-  }, [commitPosition, pause, resetScore, song.id, song.durationBeats]);
+  }, [
+    commitPosition,
+    pause,
+    resetScore,
+    setBackingBandJamming,
+    song.id,
+    song.durationBeats,
+    stopBackingBand,
+  ]);
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -2373,6 +2494,53 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       window.removeEventListener("blur", blur);
     };
   }, [releaseHeldSources]);
+
+  useEffect(() => {
+    if (!backingBand.isJamming) return;
+    let frame = 0;
+    let previousTime = performance.now();
+    const jamLoop: KeyboardHeroLoop = {
+      enabled: true,
+      startBeat: 0,
+      endBeat: song.durationBeats,
+    };
+
+    const animateBand = (now: number) => {
+      if (!backingBandJammingRef.current) return;
+      const currentSettings = settingsRef.current;
+      if (!currentSettings.backingBandEnabled) {
+        setBackingBandJamming(false);
+        stopBackingBand(true);
+        return;
+      }
+
+      const deltaSeconds = Math.min(
+        0.1,
+        Math.max(0, (now - previousTime) / 1000),
+      );
+      previousTime = now;
+      const beatsAdvanced =
+        deltaSeconds * (song.bpm * currentSettings.tempoScale) / 60;
+      let nextBeat = backingBandJamBeatRef.current + beatsAdvanced;
+      if (nextBeat >= song.durationBeats) {
+        nextBeat %= song.durationBeats;
+        stopBackingBand(true);
+      }
+      backingBandJamBeatRef.current = nextBeat;
+      syncBackingBand(nextBeat, currentSettings, jamLoop);
+      frame = requestAnimationFrame(animateBand);
+    };
+
+    frame = requestAnimationFrame(animateBand);
+    return () => cancelAnimationFrame(frame);
+  }, [
+    backingBand.isJamming,
+    setBackingBandJamming,
+    song.bpm,
+    song.durationBeats,
+    stopBackingBand,
+    syncBackingBand,
+  ]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -2537,14 +2705,22 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       const loopPowerBeatsThisFrame = Math.max(0, nextBeat - oldBeat);
 
       if (nextBeat >= loopEnd) {
-        if (activeLoop.enabled) {
+        const shouldQuickLoop =
+          quickLoopEnabledRef.current && !activeLoop.enabled;
+        if (activeLoop.enabled || shouldQuickLoop) {
           loopWrapped = true;
-          nextBeat = activeLoop.startBeat + (nextBeat - loopEnd);
+          nextBeat =
+            (activeLoop.enabled ? activeLoop.startBeat : 0) +
+            (nextBeat - loopEnd);
           stopListenVoices();
           stopBackingBand(true);
           if (currentSettings.practiceMode !== "listen") {
-            resetAttemptForLoop();
-            advancePowerByBeats(loopPowerBeatsThisFrame);
+            if (shouldQuickLoop) {
+              resetScore();
+            } else {
+              resetAttemptForLoop();
+              advancePowerByBeats(loopPowerBeatsThisFrame);
+            }
           }
           lastMetronomeBeatRef.current = null;
         } else {
@@ -2585,7 +2761,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         }
       }
 
-      if (!loopWrapped && currentSettings.practiceMode !== "listen") {
+      if (
+        !loopWrapped &&
+        !quickLoopEnabledRef.current &&
+        currentSettings.practiceMode !== "listen"
+      ) {
         advancePowerByBeats(powerBeatsThisFrame);
       }
 
@@ -2671,6 +2851,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     backingBand,
     settings,
     loop,
+    quickLoopEnabled,
     togglePlay,
     play,
     pause,
@@ -2684,9 +2865,14 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setBackingBandEnabled,
     setBackingBandMix,
     setBackingBandIntensity,
+    playBackingBand,
+    pauseBackingBand,
+    toggleBackingBandPlayback,
     setLatencyMs,
     setLoop,
     toggleLoop,
+    setQuickLoopEnabled,
+    toggleQuickLoop,
     connectMIDI,
     selectMIDIInput,
     setMIDIChannel,

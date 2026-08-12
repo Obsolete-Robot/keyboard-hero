@@ -21,7 +21,7 @@
     inset 0 -40px 90px rgba(0, 0, 0, 0.28),
     0 30px 90px rgba(1, 4, 18, 0.45),
     0 0 60px color-mix(in srgb, var(--kh-primary) 8%, transparent);
-  transition: border-color 240ms ease, box-shadow 240ms ease;
+  transition: border-color 900ms ease, box-shadow 1100ms ease;
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   container-type: inline-size;
 }
@@ -73,6 +73,7 @@
     linear-gradient(102deg, color-mix(in srgb, var(--kh-primary) 8%, transparent), transparent 28% 72%, color-mix(in srgb, var(--kh-secondary) 9%, transparent));
   mix-blend-mode: screen;
   pointer-events: none;
+  transition: opacity 900ms ease-out, filter 900ms ease-out;
 }
 
 .kh-stage--power {
@@ -85,8 +86,9 @@
 }
 
 .kh-stage--power .kh-stage__power-wash {
-  opacity: calc(0.22 + var(--kh-power-energy) * 0.18);
-  animation: kh-stage-power-breathe 1.9s ease-in-out infinite alternate;
+  animation:
+    kh-stage-power-enter 950ms ease-out both,
+    kh-stage-power-breathe 2.4s 950ms ease-in-out infinite alternate;
 }
 
 .kh-stage--power .kh-stage__strike-zone {
@@ -580,6 +582,17 @@
   to {
     opacity: calc(0.25 + var(--kh-power-energy) * 0.2);
     filter: saturate(1.14) brightness(1.07);
+  }
+}
+
+@keyframes kh-stage-power-enter {
+  from {
+    opacity: 0;
+    filter: saturate(0.82) brightness(0.92);
+  }
+  to {
+    opacity: calc(0.17 + var(--kh-power-energy) * 0.15);
+    filter: saturate(1.02) brightness(0.96);
   }
 }
 

@@ -871,9 +871,13 @@ export default function Home() {
         }`;
   const backingBandStatus = !hero.settings.backingBandEnabled
     ? "Band off"
-    : hero.backingBand.active
-      ? "Band live"
-      : "Band ready";
+    : hero.backingBand.isJamming && hero.backingBand.active
+      ? "Band jamming"
+      : hero.backingBand.isJamming
+        ? "Band starting"
+        : hero.backingBand.active
+          ? "Band live"
+          : "Band ready";
   const backingBandEnergy = Math.round(
     Math.max(0, Math.min(1, hero.backingBand.energy)) * 100,
   );
@@ -1681,24 +1685,44 @@ export default function Home() {
                     <span>Drums · bass · rhythm</span>
                   </div>
                 </div>
-                <button
-                  aria-label={`${
-                    hero.settings.backingBandEnabled ? "Turn off" : "Turn on"
-                  } backing band`}
-                  aria-pressed={hero.settings.backingBandEnabled}
-                  className={`band-power${
-                    hero.settings.backingBandEnabled ? " on" : ""
-                  }`}
-                  onClick={() =>
-                    hero.setBackingBandEnabled(
-                      !hero.settings.backingBandEnabled,
-                    )
-                  }
-                  type="button"
-                >
-                  <span aria-hidden="true" className="band-power-light" />
-                  {hero.settings.backingBandEnabled ? "On" : "Off"}
-                </button>
+                <div className="band-actions">
+                  <button
+                    aria-label={
+                      hero.backingBand.isJamming ? "Pause band" : "Play band"
+                    }
+                    aria-pressed={hero.backingBand.isJamming}
+                    className={`band-jam-button${
+                      hero.backingBand.isJamming ? " is-playing" : ""
+                    }`}
+                    onClick={hero.toggleBackingBandPlayback}
+                    type="button"
+                  >
+                    {hero.backingBand.isJamming ? (
+                      <Pause aria-hidden="true" size={12} fill="currentColor" />
+                    ) : (
+                      <Play aria-hidden="true" size={12} fill="currentColor" />
+                    )}
+                    {hero.backingBand.isJamming ? "Pause" : "Play"}
+                  </button>
+                  <button
+                    aria-label={`${
+                      hero.settings.backingBandEnabled ? "Turn off" : "Turn on"
+                    } backing band`}
+                    aria-pressed={hero.settings.backingBandEnabled}
+                    className={`band-power${
+                      hero.settings.backingBandEnabled ? " on" : ""
+                    }`}
+                    onClick={() =>
+                      hero.setBackingBandEnabled(
+                        !hero.settings.backingBandEnabled,
+                      )
+                    }
+                    type="button"
+                  >
+                    <span aria-hidden="true" className="band-power-light" />
+                    {hero.settings.backingBandEnabled ? "On" : "Off"}
+                  </button>
+                </div>
               </div>
 
               <div
@@ -1717,7 +1741,13 @@ export default function Home() {
                 </div>
                 <div className="band-energy-copy" aria-hidden="true">
                   <strong>{hero.backingBand.active ? backingBandEnergy : 0}%</strong>
-                  <span>{hero.backingBand.active ? "Stage energy" : "On standby"}</span>
+                  <span>
+                    {hero.backingBand.isJamming
+                      ? "Free-play groove"
+                      : hero.backingBand.active
+                        ? "Stage energy"
+                        : "On standby"}
+                  </span>
                 </div>
               </div>
 

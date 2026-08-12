@@ -39,6 +39,7 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /Re-align after MPK Octave, KTrans, or preset changes/);
   assert.match(html, /Backing band/);
   assert.match(html, /Band ready/);
+  assert.match(html, /Play band/);
   assert.match(html, /Band mix/);
   assert.match(html, /Intensity/);
   assert.match(html, /Practice mode/);
@@ -298,6 +299,12 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /backingBandEnabled/);
   assert.match(engine, /backingBandMix/);
   assert.match(engine, /backingBandIntensity/);
+  assert.match(engine, /backingBandJamBeatRef/);
+  assert.match(engine, /toggleBackingBandPlayback/);
+  assert.match(engine, /const animateBand = \(now: number\)/);
+  assert.match(page, /hero\.backingBand\.isJamming \? "Pause band" : "Play band"/);
+  assert.match(page, /onClick=\{hero\.toggleBackingBandPlayback\}/);
+  assert.match(appCss, /\.band-jam-button\.is-playing/);
   assert.match(engine, /mapMIDINoteToKeyboardRange/);
   assert.match(
     engine,
