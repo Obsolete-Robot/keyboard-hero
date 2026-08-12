@@ -100,8 +100,15 @@ input:focus-visible {
   --arena-header-height: clamp(58px, 9dvh, 70px);
   --arena-transport-height: clamp(124px, 18vh, 148px);
   --arena-transport-height: clamp(124px, 18dvh, 148px);
-  --arena-primary-width: min(100%, 129vh, 1280px);
-  --arena-primary-width: min(100%, 129dvh, 1280px);
+  --arena-primary-width: 100%;
+  --arena-stage-height: max(
+    320px,
+    calc(100vh - var(--arena-header-height) - var(--arena-transport-height))
+  );
+  --arena-stage-height: max(
+    320px,
+    calc(100dvh - var(--arena-header-height) - var(--arena-transport-height))
+  );
   position: relative;
   min-height: 100vh;
   min-height: 100dvh;
@@ -354,7 +361,7 @@ input:focus-visible {
 }
 
 .main-grid {
-  width: min(1780px, 100%);
+  width: 100%;
   min-height: calc(100vh - var(--arena-header-height));
   min-height: calc(100dvh - var(--arena-header-height));
   margin: 0 auto;
@@ -376,9 +383,8 @@ input:focus-visible {
   position: relative;
   width: var(--arena-primary-width);
   min-height: 0;
-  height: auto;
-  aspect-ratio: 16 / 9;
-  flex: 0 0 auto;
+  height: var(--arena-stage-height);
+  flex: 0 0 var(--arena-stage-height);
   overflow: hidden;
   background: #050509;
   container-name: performance-stage;
@@ -871,6 +877,57 @@ input:focus-visible {
   --encouragement-color: #ff7f9a;
 }
 
+.performance-miss-toasts {
+  position: absolute;
+  z-index: 15;
+  top: 158px;
+  left: 18px;
+  width: min(190px, calc(100% - 36px));
+  height: 42px;
+  pointer-events: none;
+}
+
+.performance-miss-toast {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 9px;
+  overflow: hidden;
+  padding: 8px 14px 8px 10px;
+  border: 1px solid rgba(255, 127, 154, 0.42);
+  border-left: 4px solid #ff7f9a;
+  color: var(--ink);
+  background: rgba(5, 5, 8, 0.9);
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.38),
+    inset 0 0 18px rgba(255, 64, 108, 0.08);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  opacity: 0;
+  backdrop-filter: blur(7px);
+  animation: miss-toast-slide 1380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.performance-miss-toast strong {
+  color: #ff9caf;
+  font: 400 22px/0.9 var(--font-display);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.performance-miss-toast span {
+  overflow: hidden;
+  color: rgba(243, 239, 227, 0.75);
+  font: 750 7px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .stage-encouragement.variant-milestone {
   top: 146px;
   width: min(450px, calc(100% - 400px));
@@ -1018,6 +1075,18 @@ input:focus-visible {
   0% { opacity: 0; clip-path: inset(0 100% 0 0); transform: translate(-50%, 6px) skewX(-4deg); }
   16%, 72% { opacity: 1; clip-path: inset(0); transform: translate(-50%, 0) skewX(0); }
   100% { opacity: 0; clip-path: inset(0 0 0 100%); transform: translate(-50%, -3px) skewX(2deg); }
+}
+
+@keyframes miss-toast-slide {
+  0% { opacity: 0; transform: translateX(calc(-100% - 18px)); }
+  14%, 68% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translate(12px, -4px); }
+}
+
+@keyframes miss-toast-fade {
+  0% { opacity: 0; }
+  10%, 68% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 @keyframes milestone-poster {
@@ -2038,6 +2107,36 @@ input:focus-visible {
   margin-top: 5px;
   color: var(--muted);
   font: 9px/1.4 var(--font-mono);
+}
+
+.next-landing-list {
+  margin-top: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.next-landing-chip {
+  min-width: 43px;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid rgba(141, 104, 255, 0.48);
+  background: rgba(141, 104, 255, 0.09);
+  color: var(--ink);
+  font: 8px/1 var(--font-mono);
+}
+
+.next-landing-chip b {
+  font-size: 9px;
+}
+
+.next-landing-chip small {
+  color: var(--acid);
+  font: inherit;
+  font-weight: 800;
 }
 
 .finger-row {
@@ -4083,6 +4182,11 @@ kbd {
     padding-block: 9px;
   }
 
+  .performance-miss-toasts {
+    top: 134px;
+    left: 12px;
+  }
+
   .stage-encouragement .encouragement-detail {
     display: none;
   }
@@ -4143,28 +4247,15 @@ kbd {
     min-height: 50px;
   }
 
+  .performance-miss-toasts {
+    top: 130px;
+    left: 8px;
+    width: min(178px, calc(100% - 16px));
+  }
+
   .count-in {
     top: 140px;
     width: min(280px, calc(100% - 20px));
-  }
-}
-
-@media (min-width: 881px) and (max-height: 644px) {
-  .app-shell {
-    /* At this height both clamps sit at 58px + 124px. This is the exact
-       16:9 width for the remaining block budget:
-       (100dvh - 182px) * 16 / 9, expanded for broad calc() support. */
-    --arena-primary-width: min(100%, max(568.89px, calc(177.7778vh - 323.56px)), 1280px);
-    --arena-primary-width: min(100%, max(568.89px, calc(177.7778dvh - 323.56px)), 1280px);
-  }
-}
-
-@media (min-width: 881px) and (min-height: 645px) and (max-height: 688px) {
-  .app-shell {
-    /* Header follows 9dvh while transport remains at its 124px floor:
-       (100dvh - 9dvh - 124px) * 16 / 9. */
-    --arena-primary-width: min(100%, calc(161.7778vh - 220.44px), 1280px);
-    --arena-primary-width: min(100%, calc(161.7778dvh - 220.44px), 1280px);
   }
 }
 
@@ -4309,9 +4400,14 @@ kbd {
   .app-shell {
     --arena-header-height: 56px;
     --arena-transport-height: 112px;
-    /* (100dvh - 56px - 112px) * 16 / 9, with a 280px stage floor. */
-    --arena-primary-width: min(100%, max(497.78px, calc(177.7778vh - 298.67px)), 1280px);
-    --arena-primary-width: min(100%, max(497.78px, calc(177.7778dvh - 298.67px)), 1280px);
+    --arena-stage-height: max(
+      280px,
+      calc(100vh - var(--arena-header-height) - var(--arena-transport-height))
+    );
+    --arena-stage-height: max(
+      280px,
+      calc(100dvh - var(--arena-header-height) - var(--arena-transport-height))
+    );
   }
 
   .topbar {
@@ -4321,8 +4417,7 @@ kbd {
   .stage-wrap {
     width: var(--arena-primary-width);
     min-height: 0;
-    height: auto;
-    aspect-ratio: 16 / 9;
+    height: var(--arena-stage-height);
   }
 
   .transport {
@@ -4510,6 +4605,12 @@ kbd {
     min-width: 0;
     min-height: 50px;
     padding: 11px 55px 11px 12px;
+  }
+
+  .performance-miss-toasts {
+    top: 128px;
+    left: 10px;
+    width: min(178px, calc(100% - 20px));
   }
 
   .encouragement-detail {
@@ -5077,6 +5178,11 @@ kbd {
     filter: none !important;
     transform: none !important;
     animation: none !important;
+  }
+
+  .performance-miss-toast {
+    transform: none !important;
+    animation: miss-toast-fade 900ms ease-out both !important;
   }
 
   .stage-wrap.is-power-mode::before {

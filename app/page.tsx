@@ -27,9 +27,11 @@ import {
 } from "lucide-react";
 import KeyboardStage, {
   type KeyboardHitFeedback,
+  type KeyboardStageHand,
   type KeyboardStageNote,
 } from "@/components/KeyboardStage";
 import PerformanceResults from "@/components/PerformanceResults";
+import { buildSongFingeringGuide } from "@/lib/fingering";
 import {
   TrainingCoach,
   TrainingLauncher,
@@ -76,16 +78,6 @@ function currentSection(song: Song, beat: number) {
       .find((section) => beat >= section.startBeat && beat < section.endBeat) ??
     song.sections[0]
   );
-}
-
-function nextSongNote(song: Song, beat: number) {
-  return song.notes.find((note) => note.startBeat >= beat - 0.04) ?? song.notes[0];
-}
-
-function handLabel(hand: "left" | "right" | "both" | undefined) {
-  if (hand === "left") return "Left hand";
-  if (hand === "right") return "Right hand";
-  return "Both hands";
 }
 
 function modeCopy(mode: "flow" | "wait" | "listen") {
@@ -427,6 +419,7 @@ export default function Home() {
       PLAYABLE_SONGS.find((candidate) => candidate.id === songId) ?? SONGS[0],
     [songId],
   );
+  const songFingering = useMemo(() => buildSongFingeringGuide(song), [song]);
   const activeTrainingLesson = useMemo(
     () => getTrainingLessonBySongId(song.id),
     [song.id],
@@ -566,7 +559,67 @@ export default function Home() {
 
   const activeSection =
     activeTrainingSection ?? currentSection(song, hero.positionBeat);
-  const nextNote = nextSongNote(song, hero.positionBeat);
+  const fingeringRange = hero.loop.enabled
+    ? { startBeat: hero.loop.startBeat, endBeat: hero.loop.endBeat }
+    : {
+        startBeat: activeSection?.startBeat ?? 0,
+        endBeat: activeSection?.endBeat ?? song.durationBeats,
+      };
+  const fingeringHands = useMemo<readonly KeyboardStageHand[]>(() => {
+    const hands = new Set<KeyboardStageHand>();
+    songFingering.notes.forEach((recommendation) => {
+      if (
+        recommendation.handIsAuthored &&
+        recommendation.fingerIsAuthored &&
+        recommendation.startBeat >= fingeringRange.startBeat - 0.000_001 &&
+        recommendation.startBeat < fingeringRange.endBeat - 0.000_001
+      ) {
+        hands.add(recommendation.hand);
+      }
+    });
+    return (["left", "right"] as const).filter((hand) => hands.has(hand));
+  }, [fingeringRange.endBeat, fingeringRange.startBeat, songFingering.notes]);
+  const nextFingeringLanding = useMemo(() => {
+    const loopNotes = hero.loop.enabled
+      ? song.notes.filter(
+          (note) =>
+            note.startBeat >= hero.loop.startBeat - 0.000_001 &&
+            note.startBeat < hero.loop.endBeat - 0.000_001,
+        )
+      : song.notes;
+    const upcomingStart = loopNotes.reduce<number | null>(
+      (next, note) =>
+        note.startBeat >= hero.positionBeat - 0.04 &&
+        (next === null || note.startBeat < next)
+          ? note.startBeat
+          : next,
+      null,
+    );
+    const landingStart =
+      upcomingStart ??
+      (hero.loop.enabled
+        ? loopNotes.reduce(
+            (first, note) => Math.min(first, note.startBeat),
+            Number.POSITIVE_INFINITY,
+          )
+        : Number.NaN);
+    if (!Number.isFinite(landingStart)) return [];
+    return loopNotes
+      .filter((note) => Math.abs(note.startBeat - landingStart) <= 0.000_001)
+      .map((note) => ({
+        note,
+        recommendation: songFingering.byNoteId.get(note.id),
+      }))
+      .sort((left, right) => left.note.midi - right.note.midi);
+  }, [
+    hero.loop.enabled,
+    hero.loop.endBeat,
+    hero.loop.startBeat,
+    hero.positionBeat,
+    song,
+    songFingering.byNoteId,
+  ]);
+  const nextLandingBeat = nextFingeringLanding[0]?.note.startBeat ?? hero.positionBeat;
   const nextTrainingLanding = useMemo(
     () =>
       activeTrainingLesson && activeTrainingSection
@@ -699,6 +752,15 @@ export default function Home() {
   const celebration = hudSustainFeedback
     ? sustainCelebration(hudSustainFeedback)
     : performanceCelebration(hudFeedback, hero.score.combo);
+  const recentMissFeedback = useMemo(
+    () =>
+      hero.feedbackEvents
+        .filter((event) => event.grade === "miss")
+        .slice(-4),
+    [hero.feedbackEvents],
+  );
+  const noteMissIsLatest =
+    !hudSustainFeedback && hudFeedback?.grade === "miss";
   const feedbackKey = hudSustainFeedback
     ? `${hudSustainFeedback.groupId}-${latestSustainFeedbackGroup.length}-${hudSustainFeedback.sequence}`
     : hudFeedback
@@ -831,13 +893,17 @@ export default function Home() {
       song.notes.map((note) => {
         const result = hero.noteResults.get(note.id);
         const heldNote = hero.heldNotes.get(note.id);
+        const fingering = songFingering.byNoteId.get(note.id);
+        const hasAuthoredFingering =
+          fingering?.handIsAuthored && fingering.fingerIsAuthored;
         return {
           id: note.id,
           midi: note.midi,
           startBeat: note.startBeat,
           durationBeats: note.durationBeats,
           velocity: (note.velocity ?? 94) / 127,
-          hand: note.hand === "both" ? undefined : note.hand,
+          hand: hasAuthoredFingering ? fingering.hand : undefined,
+          finger: hasAuthoredFingering ? fingering.finger : undefined,
           state: heldNote
             ? "active"
             : result
@@ -848,7 +914,7 @@ export default function Home() {
           holdProgress: heldNote?.progress,
         };
       }),
-    [hero.heldNotes, hero.noteResults, song],
+    [hero.heldNotes, hero.noteResults, song, songFingering],
   );
 
   const stageFeedback = useMemo<readonly KeyboardHitFeedback[]>(
@@ -1136,6 +1202,7 @@ export default function Home() {
               currentBeat={hero.visualBeat}
               currentTime={hero.positionSeconds}
               feedback={stageFeedback}
+              fingeringHands={fingeringHands}
               intensity={Math.min(
                 2,
                 0.85 + hero.score.combo / 28 + hero.power.energy * 0.22,
@@ -1279,6 +1346,7 @@ export default function Home() {
             )}
 
             {celebration &&
+              !noteMissIsLatest &&
               !songComplete &&
               (hero.countdown === null || hero.countdown <= 0) && (
                 <div
@@ -1292,6 +1360,19 @@ export default function Home() {
                   {scoreDelta > 0 && (
                     <b className="encouragement-points">+{scoreDelta.toLocaleString()}</b>
                   )}
+                </div>
+              )}
+
+            {!songComplete &&
+              recentMissFeedback.length > 0 &&
+              (hero.countdown === null || hero.countdown <= 0) && (
+                <div className="performance-miss-toasts" aria-hidden="true">
+                  {recentMissFeedback.map((event) => (
+                    <div className="performance-miss-toast" key={event.id}>
+                      <strong>Miss</strong>
+                      <span>Reset // next note</span>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -1500,25 +1581,43 @@ export default function Home() {
 
           <section className="coach-section grow">
             <div className="section-kicker">
-              Next move <strong>{Math.max(0, nextNote.startBeat - hero.positionBeat).toFixed(1)} beats</strong>
+              Next move <strong>{Math.max(0, nextLandingBeat - hero.positionBeat).toFixed(1)} beats</strong>
             </div>
             <div className="next-note">
-              <div className="note-orb">{midiToNoteName(nextNote.midi)}</div>
+              <div
+                aria-label={`${nextFingeringLanding.length} notes in the next landing`}
+                className="note-orb"
+              >
+                {nextFingeringLanding.length > 1
+                  ? `${nextFingeringLanding.length}×`
+                  : nextFingeringLanding[0]
+                    ? midiToNoteName(nextFingeringLanding[0].note.midi)
+                    : "—"}
+              </div>
               <div className="next-note-copy">
-                <strong>{handLabel(nextNote.hand)}</strong>
-                <span>
-                  Finger {nextNote.finger ?? "—"} · {nextNote.durationBeats} beat
-                  {nextNote.durationBeats === 1 ? "" : "s"}
-                </span>
-                <div className="finger-row" aria-label={`Use finger ${nextNote.finger ?? "unknown"}`}>
-                  {[1, 2, 3, 4, 5].map((finger) => (
-                    <span
-                      className={`finger-dot${finger === nextNote.finger ? " active" : ""}`}
-                      key={finger}
-                    >
-                      {finger}
-                    </span>
-                  ))}
+                <strong>Suggested fingering</strong>
+                <span>MIDI checks notes and timing, not which fingers you use.</span>
+                <div
+                  aria-label="Suggested fingering for the next notes"
+                  className="next-landing-list"
+                  role="list"
+                >
+                  {nextFingeringLanding.map(({ note, recommendation }) => {
+                    const hasAuthoredFingering = Boolean(
+                      recommendation?.handIsAuthored &&
+                        recommendation.fingerIsAuthored,
+                    );
+                    return (
+                      <div className="next-landing-chip" key={note.id} role="listitem">
+                        <b>{midiToNoteName(note.midi)}</b>
+                        <small>
+                          {hasAuthoredFingering && recommendation
+                            ? `${recommendation.hand === "left" ? "L" : "R"}${recommendation.finger}`
+                            : "No suggestion"}
+                        </small>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

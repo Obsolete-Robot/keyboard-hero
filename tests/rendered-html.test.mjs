@@ -123,6 +123,9 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /hero\.score\.sustainPoints/);
   assert.match(page, /<PerformanceResults/);
   assert.match(page, /variant-\$\{celebration\.variant\}/);
+  assert.match(page, /recentMissFeedback\.map/);
+  assert.match(page, /className="performance-miss-toasts"/);
+  assert.match(page, /<span>Reset \/\/ next note<\/span>/);
   assert.match(page, /target\.tagName === "BUTTON"/);
   assert.match(page, /Performance port connected/);
   assert.match(page, /outside C3–C5/);
@@ -170,21 +173,26 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /Power Mode activated/);
   assert.match(page, /power-meter-track/);
   assert.match(appCss, /\.power-meter\.is-active/);
+  assert.match(appCss, /\.performance-miss-toast \{/);
+  assert.match(appCss, /@keyframes miss-toast-slide/);
   assert.match(appCss, /power-stage-breathe/);
   assert.match(appCss, /prefers-reduced-motion: reduce/);
   assert.match(appCss, /--arena-header-height: clamp\(58px, 9dvh, 70px\)/);
   assert.match(appCss, /--arena-transport-height: clamp\(124px, 18dvh, 148px\)/);
-  assert.match(appCss, /--arena-primary-width: min\(100%, 129dvh, 1280px\)/);
+  assert.match(appCss, /--arena-primary-width: 100%/);
+  assert.match(appCss, /--arena-stage-height: max\(/);
+  assert.match(
+    appCss,
+    /calc\(100dvh - var\(--arena-header-height\) - var\(--arena-transport-height\)\)/,
+  );
   assert.match(appCss, /overflow-y: auto/);
   assert.match(appCss, /\.app-shell \{[\s\S]*?overflow: visible;/);
-  assert.match(appCss, /aspect-ratio: 16 \/ 9/);
+  assert.match(appCss, /\.main-grid \{[\s\S]*?width: 100%;/);
+  assert.match(appCss, /\.stage-wrap \{[\s\S]*?height: var\(--arena-stage-height\);/);
   assert.match(appCss, /\.stage-wrap > \.kh-stage \{[\s\S]*?min-height: 0;/);
-  assert.match(appCss, /max-height: 644px/);
-  assert.match(appCss, /max\(568\.89px, calc\(177\.7778dvh - 323\.56px\)\)/);
-  assert.match(appCss, /calc\(161\.7778dvh - 220\.44px\)/);
   assert.match(appCss, /max-width: 1000px/);
   assert.match(appCss, /orientation: landscape/);
-  assert.match(appCss, /max\(497\.78px, calc\(177\.7778dvh - 298\.67px\)\)/);
+  assert.match(appCss, /280px,[\s\S]*?calc\(100dvh - var\(--arena-header-height\) - var\(--arena-transport-height\)\)/);
   assert.match(appCss, /minmax\(80px, 0\.55fr\) 44px minmax\(218px, 1\.45fr\)/);
   assert.match(appCss, /\.close-button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/);
   assert.match(page, /Rockstar!/);
@@ -212,6 +220,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /data-power-mode/);
   assert.match(stage, /motionQuery\.addEventListener\("change"/);
   assert.match(stage, /motionQuery\.removeEventListener\("change"/);
+  assert.match(stage, /cameraTargetY = width >= 620 && width < 900 \? 0\.7 : 0\.1/);
+  assert.match(stage, /camera\.lookAt\(0, cameraTargetY, -2\.1\)/);
   assert.match(stage, /holdProgress\?: number/);
   assert.match(stage, /const AIM_RENDER_ORDER = 1200/);
   assert.match(stage, /held-aim-white-ring/);
@@ -230,7 +240,21 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /const separationGap/);
   assert.match(stage, /headCap/);
   assert.match(stage, /tailCap/);
+  assert.match(stage, /finger\?: KeyboardFinger/);
+  assert.match(stage, /fingeringHands\?: readonly KeyboardStageHand\[\]/);
+  assert.match(stage, /authoredFingeringForNote/);
+  assert.match(stage, /const nextStartBeat/);
+  assert.match(stage, /left: \[5, 4, 3, 2, 1\]/);
+  assert.match(stage, /right: \[1, 2, 3, 4, 5\]/);
+  assert.match(stage, /1: "Thumb"/);
+  assert.match(stage, /5: "Pinky"/);
+  assert.match(stage, /T thumb · I index · M middle · R ring · P pinky/);
+  assert.match(stage, /fingerLabelMaterial\?\.dispose\(\)/);
+  assert.match(stage, /fingerLabelTexture\?\.dispose\(\)/);
+  assert.match(stage, /SUGGESTED FINGERING/);
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
+  assert.match(stageCss, /\.kh-stage__finger-guide \{/);
+  assert.match(stageCss, /\.kh-stage__finger\.is-active/);
   assert.match(stageCss, /\.kh-stage--power/);
   assert.match(stageCss, /kh-stage-power-breathe/);
   assert.match(results, /Official score sheet/);

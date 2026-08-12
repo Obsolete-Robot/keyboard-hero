@@ -470,10 +470,20 @@ const saintsBassProgression: readonly (readonly [number, number])[] = [
 ];
 
 const saintsBass: NoteSeed[] = saintsBassProgression.flatMap(
-  ([root, fifth], bar) => [
-    tone(root, bar * 4, 1.5, "left", 5, 78, true),
-    tone(fifth, bar * 4 + 2, 1.5, "left", 1, 76),
-  ],
+  ([root, fifth], bar) => {
+    const lowerNote = Math.min(root, fifth);
+    return [
+      tone(root, bar * 4, 1.5, "left", root === lowerNote ? 5 : 1, 78, true),
+      tone(
+        fifth,
+        bar * 4 + 2,
+        1.5,
+        "left",
+        fifth === lowerNote ? 5 : 1,
+        76,
+      ),
+    ];
+  },
 );
 
 const waltzMelody: NoteSeed[] = [
@@ -625,13 +635,14 @@ const buildCanonNotes = (): NoteSeed[] => {
   canonProgression.forEach((harmony, bar) => {
     const start = bar * 4;
     for (let beat = 0; beat < 4; beat += 1) {
+      const bassNote = harmony.bass[beat % 2];
       result.push(
         tone(
-          harmony.bass[beat % 2],
+          bassNote,
           start + beat,
           0.82,
           "left",
-          beat % 2 === 0 ? 5 : 1,
+          bassNote === Math.min(...harmony.bass) ? 5 : 1,
           76,
           beat === 0,
         ),
@@ -646,13 +657,14 @@ const buildCanonNotes = (): NoteSeed[] => {
   canonProgression.forEach((harmony, bar) => {
     const start = 32 + bar * 4;
     for (let beat = 0; beat < 4; beat += 1) {
+      const bassNote = harmony.bass[beat % 2];
       result.push(
         tone(
-          harmony.bass[beat % 2],
+          bassNote,
           start + beat,
           0.82,
           "left",
-          beat % 2 === 0 ? 5 : 1,
+          bassNote === Math.min(...harmony.bass) ? 5 : 1,
           78,
           beat === 0,
         ),
