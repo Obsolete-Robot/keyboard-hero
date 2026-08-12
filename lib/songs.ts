@@ -1814,6 +1814,14 @@ export function validateSong(song: Song): string[] {
     if (song.accompaniment.progression.length === 0) {
       issues.push("accompaniment progression is empty");
     }
+    if (
+      song.accompaniment.progression.some(
+        (symbol) =>
+          !/^(?:[A-G](?:#|b)?)(?:m|m7|maj7|7|dim)?$/.test(symbol),
+      )
+    ) {
+      issues.push("accompaniment progression contains an unsupported chord symbol");
+    }
     const positions = [
       ...song.accompaniment.kick,
       ...song.accompaniment.snare,
@@ -1830,12 +1838,13 @@ export function validateSong(song: Song): string[] {
         (step) =>
           !Number.isFinite(step.duration) ||
           step.duration <= 0 ||
+          step.duration > 1 ||
           !Number.isFinite(step.velocity) ||
           step.velocity <= 0 ||
           step.velocity > 1,
       )
     ) {
-      issues.push("accompaniment steps must have positive durations and velocities from 0 through 1");
+      issues.push("accompaniment step durations and velocities must be finite and within (0, 1]");
     }
   }
 

@@ -343,8 +343,10 @@ export const ACCOMPANIMENT_PROFILES = {
     harmonyVoice: "strings",
     kick: [0, 0.375, 0.5, 0.625, 0.875], snare: [0.25, 0.75], hats: EIGHTHS_4,
     openHat: [0.875],
-    bass: [bass(0, "root", 0.16, 0.84), bass(0.25, "fifth", 0.14, 0.64), bass(0.5, "octave", 0.16, 0.78), bass(0.75, "approach", 0.12, 0.68)],
-    harmony: [chord(0.125, 0.12, 0.5), chord(0.375, 0.12, 0.46), chord(0.625, 0.12, 0.52), chord(0.875, 0.1, 0.48)], voicingOffset: 0,
+    bass: [bass(0, "root", 0.2, 0.84), bass(0.5, "octave", 0.18, 0.72)],
+    // The melody is intentionally chromatic; a low sustained string bed leaves
+    // it room instead of firing block chords against every passing tone.
+    harmony: [chord(0, 0.92, 0.28)], voicingOffset: 0,
   },
   "neon-skyline-finale": {
     name: "Skyline arena band",
@@ -363,14 +365,22 @@ export type AccompanimentProfileId = keyof typeof ACCOMPANIMENT_PROFILES;
 export function accompanimentFor(
   familyId: string,
   progression: readonly string[],
+  measuresPerPass: number,
 ): SongAccompaniment {
   const profile = ACCOMPANIMENT_PROFILES[familyId as AccompanimentProfileId];
   if (!profile) {
     throw new Error(`Missing authored accompaniment profile for ${familyId}.`);
   }
+  const measureCount = Math.max(1, Math.round(measuresPerPass));
+  const formProgression = Array.from(
+    { length: measureCount },
+    (_, measure) => progression[measure % progression.length] ?? "C",
+  );
   return {
     arrangementId: familyId,
-    progression: [...progression],
+    // Materialize one complete song pass so the chord form always resets with
+    // the melody, even when the source shorthand does not divide the form.
+    progression: formProgression,
     ...profile,
   };
 }

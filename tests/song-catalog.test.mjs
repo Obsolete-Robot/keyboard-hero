@@ -350,6 +350,25 @@ test("authored chord progressions drive harmony instead of melody-note guessing"
     ),
     false,
   );
+  assert.deepEqual(
+    getSongChart("marys-two-hand-march", "easy").accompaniment.progression,
+    ["C", "C", "G7", "C", "C", "C", "G7", "C"],
+    "Mary's harmony should support each melody phrase instead of alternating blindly",
+  );
+});
+
+test("every accompaniment chord form resets exactly with its melody pass", () => {
+  for (const family of SONG_FAMILIES) {
+    const song = getSongChart(family, "easy");
+    const passBeats = song.sections[0].endBeat - song.sections[0].startBeat;
+    const opening = deriveHarmonyAtBeat(song, 0);
+    const repeatedOpening = deriveHarmonyAtBeat(song, passBeats);
+    assert.equal(
+      repeatedOpening.symbol,
+      opening.symbol,
+      `${family.id} harmony must not drift when the melody repeats`,
+    );
+  }
 });
 
 test("Medium charts use both hands and introduce chord landings", () => {
