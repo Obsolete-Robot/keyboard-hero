@@ -34,9 +34,24 @@ const RESULT_REVEAL = {
   testScoreDuration: 680,
   grade: 3680,
   feedback: 4120,
+  goldStar: 4360,
   actions: 4250,
   actionsReady: 4600,
 } as const;
+
+const GOLD_STAR_HOLD_MS = 2_000;
+const GOLD_STAR_CELEBRATION_MS = 3_450;
+const GOLD_STAR_PARTICLES = Array.from({ length: 36 }, (_, index) => {
+  const angle = (index / 36) * Math.PI * 2 + (index % 3) * 0.055;
+  const distance = 150 + (index % 6) * 24;
+  return {
+    delay: (index % 5) * 24,
+    rotate: 180 + (index % 7) * 57,
+    size: 5 + (index % 4) * 2,
+    x: Math.cos(angle) * distance,
+    y: Math.sin(angle) * distance,
+  };
+});
 
 function AnimatedNumber({
   value,
@@ -101,10 +116,13 @@ export default function PerformanceResults({
   const fitFrameRef = useRef<HTMLDivElement>(null);
   const fitScalerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const goldStarHeroRef = useRef<HTMLDivElement>(null);
+  const goldStarTargetRefs = useRef<Array<SVGSVGElement | null>>([]);
   const [reduceMotion] = useState(() =>
     resolveReducedMotion(motionPreference),
   );
   const [revealReady, setRevealReady] = useState(reduceMotion);
+  const [goldStarLanded, setGoldStarLanded] = useState(reduceMotion);
   const report = useMemo(
     () => buildPerformanceReport(song, noteResults, score, practiceMode),
     [noteResults, practiceMode, score, song],
@@ -115,6 +133,13 @@ export default function PerformanceResults({
       : report.grade === "F"
         ? "fail"
         : "pass";
+  const perfectRunCelebration = report.perfectRun && !reduceMotion;
+  const actionsDelay = perfectRunCelebration
+    ? RESULT_REVEAL.goldStar + GOLD_STAR_CELEBRATION_MS + 140
+    : RESULT_REVEAL.actions;
+  const actionsReadyDelay = perfectRunCelebration
+    ? actionsDelay + 350
+    : RESULT_REVEAL.actionsReady;
 
   useEffect(() => {
     const timers: number[] = [];
@@ -142,10 +167,13 @@ export default function PerformanceResults({
       queueCue(RESULT_REVEAL.stagePoints, "stage-count");
       queueCue(RESULT_REVEAL.testScore, "test-score");
       queueCue(RESULT_REVEAL.grade, stampCue);
+      if (report.perfectRun) {
+        queueCue(RESULT_REVEAL.goldStar, "stamp-pass", 2);
+      }
     }
 
     return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, [gradeOutcome, onCue, reduceMotion, report.rows]);
+  }, [gradeOutcome, onCue, reduceMotion, report.perfectRun, report.rows]);
 
   useEffect(() => {
     const activeElement = document.activeElement;
@@ -160,7 +188,7 @@ export default function PerformanceResults({
     dialogRef.current?.focus({ preventScroll: true });
     const timer = window.setTimeout(
       () => setRevealReady(true),
-      reduceMotion ? 0 : RESULT_REVEAL.actionsReady,
+      reduceMotion ? 0 : actionsReadyDelay,
     );
     return () => {
       window.clearTimeout(timer);
@@ -170,7 +198,7 @@ export default function PerformanceResults({
         returnFocus.focus({ preventScroll: true });
       }
     };
-  }, [reduceMotion]);
+  }, [actionsReadyDelay, reduceMotion]);
 
   useLayoutEffect(() => {
     const overlay = overlayRef.current;
@@ -242,6 +270,95 @@ export default function PerformanceResults({
     };
   }, []);
 
+  useLayoutEffect(() => {
+    if (!perfectRunCelebration || goldStarLanded) return;
+
+    let animation: Animation | null = null;
+    const timer = window.setTimeout(() => {
+      const heroStar = goldStarHeroRef.current;
+      const dialog = dialogRef.current;
+      const targetIndex = Math.max(
+        0,
+        Math.min(MAX_GOLD_STARS - 1, masteryStars - 1),
+      );
+      const targetStar = goldStarTargetRefs.current[targetIndex];
+      if (!heroStar || !dialog || !targetStar) {
+        setGoldStarLanded(true);
+        return;
+      }
+
+      const heroRect = heroStar.getBoundingClientRect();
+      const targetRect = targetStar.getBoundingClientRect();
+      const dialogRect = dialog.getBoundingClientRect();
+      const fitScale = dialog.offsetWidth > 0
+        ? dialogRect.width / dialog.offsetWidth
+        : 1;
+      const targetX =
+        (targetRect.left + targetRect.width / 2 -
+          (heroRect.left + heroRect.width / 2)) /
+        Math.max(0.001, fitScale);
+      const targetY =
+        (targetRect.top + targetRect.height / 2 -
+          (heroRect.top + heroRect.height / 2)) /
+        Math.max(0.001, fitScale);
+      const targetScale = Math.max(0.04, targetRect.width / heroRect.width);
+      const holdEnd = (600 + GOLD_STAR_HOLD_MS) / GOLD_STAR_CELEBRATION_MS;
+
+      animation = heroStar.animate(
+        [
+          {
+            opacity: 0,
+            transform: "translate(0, 18px) scale(0.08) rotate(-28deg)",
+            offset: 0,
+          },
+          {
+            opacity: 1,
+            transform: "translate(0, 0) scale(1.18) rotate(7deg)",
+            offset: 0.1,
+          },
+          {
+            opacity: 1,
+            transform: "translate(0, 0) scale(0.96) rotate(-3deg)",
+            offset: 0.145,
+          },
+          {
+            opacity: 1,
+            transform: "translate(0, 0) scale(1) rotate(0deg)",
+            offset: 0.17,
+          },
+          {
+            opacity: 1,
+            transform: "translate(0, 0) scale(1) rotate(0deg)",
+            offset: holdEnd,
+          },
+          {
+            opacity: 1,
+            transform: `translate(${targetX}px, ${targetY}px) scale(${targetScale}) rotate(360deg)`,
+            offset: 0.96,
+          },
+          {
+            opacity: 0,
+            transform: `translate(${targetX}px, ${targetY}px) scale(${targetScale}) rotate(360deg)`,
+            offset: 1,
+          },
+        ],
+        {
+          duration: GOLD_STAR_CELEBRATION_MS,
+          easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+          fill: "forwards",
+        },
+      );
+      animation.addEventListener("finish", () => setGoldStarLanded(true), {
+        once: true,
+      });
+    }, RESULT_REVEAL.goldStar);
+
+    return () => {
+      window.clearTimeout(timer);
+      animation?.cancel();
+    };
+  }, [goldStarLanded, masteryStars, perfectRunCelebration]);
+
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
@@ -304,7 +421,7 @@ export default function PerformanceResults({
               "--test-block-delay": `${RESULT_REVEAL.testScore - 140}ms`,
               "--grade-delay": `${RESULT_REVEAL.grade}ms`,
               "--feedback-delay": `${RESULT_REVEAL.feedback}ms`,
-              "--actions-delay": `${RESULT_REVEAL.actions}ms`,
+              "--actions-delay": `${actionsDelay}ms`,
             } as CSSProperties}
             tabIndex={-1}
           >
@@ -445,9 +562,18 @@ export default function PerformanceResults({
           <span className="results-mastery-stars" aria-hidden="true">
             {Array.from({ length: MAX_GOLD_STARS }, (_, index) => (
               <Star
-                className={index < masteryStars ? "is-earned" : ""}
+                className={`${index < masteryStars ? "is-earned" : ""}${
+                  goldStarLanded &&
+                  report.perfectRun &&
+                  index === Math.max(0, masteryStars - 1)
+                    ? " just-landed"
+                    : ""
+                }`}
                 fill={index < masteryStars ? "currentColor" : "none"}
                 key={index}
+                ref={(node) => {
+                  goldStarTargetRefs.current[index] = node;
+                }}
                 size={22}
               />
             ))}
@@ -482,11 +608,46 @@ export default function PerformanceResults({
           </button>
         </div>
 
+        {perfectRunCelebration && !goldStarLanded && (
+          <div
+            aria-hidden="true"
+            className="results-gold-star-celebration"
+            style={{
+              "--gold-star-delay": `${RESULT_REVEAL.goldStar}ms`,
+            } as CSSProperties}
+          >
+            <span className="results-gold-star-ring ring-one" />
+            <span className="results-gold-star-ring ring-two" />
+            <div className="results-gold-star-particles">
+              {GOLD_STAR_PARTICLES.map((particle, index) => (
+                <i
+                  key={index}
+                  style={{
+                    "--particle-delay": `${particle.delay}ms`,
+                    "--particle-rotate": `${particle.rotate}deg`,
+                    "--particle-size": `${particle.size}px`,
+                    "--particle-x": `${particle.x}px`,
+                    "--particle-y": `${particle.y}px`,
+                  } as CSSProperties}
+                />
+              ))}
+            </div>
+            <div className="results-gold-star-hero" ref={goldStarHeroRef}>
+              <Star fill="currentColor" strokeWidth={1.15} />
+              <span>
+                <strong>Gold star</strong>
+                <em>Perfect Flow</em>
+              </span>
+            </div>
+          </div>
+        )}
+
         <p className="sr-only" role="status">
           Performance complete. {score.points} stage points. {finalScoreLabel}. Final grade {report.gradeLabel}.
           {report.missedOrUnplayed > 0
             ? ` ${report.missedOrUnplayed} notes were missed or unplayed.`
             : " Every note was completed."}
+          {report.perfectRun ? " Gold mastery star earned." : ""}
         </p>
           </section>
         </div>
