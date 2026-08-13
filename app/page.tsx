@@ -10,10 +10,12 @@ import {
 } from "react";
 import {
   AudioLines,
+  ArrowRight,
   Check,
   ChevronDown,
   CircleGauge,
   Headphones,
+  LockKeyhole,
   Pause,
   Play,
   Repeat2,
@@ -33,6 +35,11 @@ import KeyboardStage, {
   type KeyboardStageNote,
 } from "@/components/KeyboardStage";
 import PerformanceResults from "@/components/PerformanceResults";
+import {
+  DEMO_SONG_FAMILIES,
+  DEMO_SONG_FAMILY_IDS,
+  isDemoSongFamily,
+} from "@/lib/demoAccess";
 import { buildSongFingeringGuide } from "@/lib/fingering";
 import {
   TrainingCoach,
@@ -318,10 +325,12 @@ function Difficulty({ value }: { value: number }) {
 }
 
 function ChallengeSelector({
+  availableSongs,
   clearedSongs,
   value,
   onChange,
 }: {
+  availableSongs: number;
   clearedSongs: number;
   value: ChallengeLevel;
   onChange: (challenge: ChallengeLevel) => void;
@@ -333,7 +342,7 @@ function ChallengeSelector({
         <span>Choose your chart</span>
         <strong>{CHALLENGE_DETAILS[value].shortDescription}</strong>
         <small>
-          {clearedSongs} of {SONG_FAMILIES.length} stages cleared
+          {clearedSongs} of {availableSongs} demo stages cleared
         </small>
       </div>
       <div className="challenge-segments">
@@ -370,9 +379,12 @@ function SongLibrary({
   progress: SongProgressState;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
+  const purchaseDialogRef = useRef<HTMLElement>(null);
+  const lockedTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [lockedFamily, setLockedFamily] = useState<SongFamily | null>(null);
   const clearedSongs = countClearedSongs(
     progress,
-    SONG_FAMILIES.map((family) => family.id),
+    [...DEMO_SONG_FAMILY_IDS],
     challengeLevel,
   );
   const careerTiers = [...new Set(SONG_FAMILIES.map((family) => family.careerTier))]
@@ -405,6 +417,27 @@ function SongLibrary({
     };
   }, []);
 
+  const closePurchasePanel = useCallback(() => {
+    setLockedFamily(null);
+    requestAnimationFrame(() => {
+      lockedTriggerRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  const openPurchasePanel = useCallback((family: SongFamily) => {
+    lockedTriggerRef.current =
+      document.activeElement instanceof HTMLButtonElement
+        ? document.activeElement
+        : null;
+    setLockedFamily(family);
+  }, []);
+
+  useEffect(() => {
+    if (lockedFamily) {
+      purchaseDialogRef.current?.focus({ preventScroll: true });
+    }
+  }, [lockedFamily]);
+
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
@@ -412,32 +445,35 @@ function SongLibrary({
     const handleDialogKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        if (lockedFamily) closePurchasePanel();
+        else onClose();
         return;
       }
       if (event.key !== "Tab") return;
 
+      const focusRoot = lockedFamily ? purchaseDialogRef.current : dialog;
+      if (!focusRoot) return;
       const focusableElements = Array.from(
-        dialog.querySelectorAll<HTMLElement>(
+        focusRoot.querySelectorAll<HTMLElement>(
           'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
         ),
       );
       if (focusableElements.length === 0) {
         event.preventDefault();
-        dialog.focus({ preventScroll: true });
+        focusRoot.focus({ preventScroll: true });
         return;
       }
       const first = focusableElements[0];
       const last = focusableElements[focusableElements.length - 1];
       if (
         event.shiftKey &&
-        (document.activeElement === first || document.activeElement === dialog)
+        (document.activeElement === first || document.activeElement === focusRoot)
       ) {
         event.preventDefault();
         last.focus();
       } else if (
         !event.shiftKey &&
-        (document.activeElement === last || document.activeElement === dialog)
+        (document.activeElement === last || document.activeElement === focusRoot)
       ) {
         event.preventDefault();
         first.focus();
@@ -446,7 +482,7 @@ function SongLibrary({
 
     dialog.addEventListener("keydown", handleDialogKeyDown);
     return () => dialog.removeEventListener("keydown", handleDialogKeyDown);
-  }, [onClose]);
+  }, [closePurchasePanel, lockedFamily, onClose]);
 
   return (
     <div className="modal-backdrop">
@@ -467,14 +503,13 @@ function SongLibrary({
         <header className="modal-head">
           <div>
             <div className="modal-kicker">
-              {SONG_FAMILIES.length}-song world tour · 3 ways to play
+              {DEMO_SONG_FAMILIES.length}-song demo tour · 3 ways to play
             </div>
             <h2>Choose your next stage.</h2>
             <p>
-              Each challenge has its own complete {SONG_FAMILIES.length}-song
-              climb. Start with a one-hand melody, add the second hand and
-              chord hits, or take on the full piano-style chart—all within the
-              same 25 keys.
+              Play one featured song from every venue in Easy, Medium, or Hard.
+              The rest of the {SONG_FAMILIES.length}-song world tour is waiting
+              in the full version.
             </p>
           </div>
           <button
@@ -488,6 +523,7 @@ function SongLibrary({
         </header>
 
         <ChallengeSelector
+          availableSongs={DEMO_SONG_FAMILIES.length}
           clearedSongs={clearedSongs}
           onChange={onChallengeChange}
           value={challengeLevel}
@@ -497,6 +533,8 @@ function SongLibrary({
           {careerTiers.map(({ tier, families }) => {
             const firstRank = families[0]?.courseRank ?? 1;
             const lastRank = families.at(-1)?.courseRank ?? firstRank;
+            const demoSongCount = families.filter(isDemoSongFamily).length;
+            const lockedSongCount = families.length - demoSongCount;
             return (
               <section className="career-tier" key={tier}>
                 <header className="career-tier-head">
@@ -505,14 +543,15 @@ function SongLibrary({
                     <h3>{CAREER_VENUES[tier - 1] ?? `Tour Stop ${tier}`}</h3>
                   </div>
                   <p>
-                    Songs {String(firstRank).padStart(2, "0")}–
-                    {String(lastRank).padStart(2, "0")} · The set gets tougher
-                    from left to right.
+                    {demoSongCount} demo song · {lockedSongCount} full-version
+                    tracks · Songs {String(firstRank).padStart(2, "0")}–
+                    {String(lastRank).padStart(2, "0")}
                   </p>
                 </header>
                 <div className="song-grid">
                   {families.map((family) => {
                     const chart = getSongChart(family, challengeLevel);
+                    const demoUnlocked = isDemoSongFamily(family);
                     const savedProgress = getSongProgress(
                       progress,
                       family.id,
@@ -521,93 +560,127 @@ function SongLibrary({
                     const goldStars = savedProgress?.perfectRuns ?? 0;
                     return (
                       <button
-                        aria-label={`Play ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}. ${
-                          savedProgress
+                        aria-haspopup={demoUnlocked ? undefined : "dialog"}
+                        aria-label={`${
+                          demoUnlocked
+                            ? "Play"
+                            : "Demo locked. View the full version to unlock"
+                        } ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}. ${
+                          demoUnlocked && savedProgress
                             ? `Cleared ${savedProgress.completedRuns} times. Best rank ${savedProgress.bestRank ?? "not recorded"}. Best score ${savedProgress.bestScore}. ${goldStars} of ${MAX_GOLD_STARS} gold mastery stars.`
-                            : "Not cleared yet."
+                            : demoUnlocked
+                              ? "Not cleared yet."
+                              : "Opens the full-version purchase panel."
                         }`}
-                        aria-pressed={family.id === activeFamilyId}
+                        aria-pressed={
+                          demoUnlocked ? family.id === activeFamilyId : undefined
+                        }
                         className={`song-card${
                           family.id === activeFamilyId ? " selected" : ""
-                        }${savedProgress ? " is-cleared" : ""}`}
+                        }${demoUnlocked && savedProgress ? " is-cleared" : ""}${
+                          demoUnlocked ? " is-demo-song" : " is-demo-locked"
+                        }`}
                         key={family.id}
-                        onClick={() => onSelect(family)}
+                        onClick={() =>
+                          demoUnlocked
+                            ? onSelect(family)
+                            : openPurchasePanel(family)
+                        }
                         type="button"
                       >
                         <span className="song-card-index">
                           SONG {String(family.courseRank).padStart(2, "0")} · {family.style}
                         </span>
                         <span className="song-card-challenge">
-                          {CHALLENGE_DETAILS[challengeLevel].label}
+                          {demoUnlocked
+                            ? `${CHALLENGE_DETAILS[challengeLevel].label} · Demo song`
+                            : "Demo locked"}
                         </span>
                         <h4>{family.title}</h4>
                         <div className="song-composer">
                           {family.subtitle ? `${family.subtitle} · ` : ""}
                           {family.composer}
                         </div>
-                        <span
-                          aria-label={`${goldStars} of ${MAX_GOLD_STARS} gold mastery stars earned`}
-                          className="song-card-mastery"
-                        >
-                          <small>Flow mastery</small>
-                          <span aria-hidden="true">
-                            {Array.from({ length: MAX_GOLD_STARS }, (_, index) => (
-                              <Star
-                                className={index < goldStars ? "is-earned" : ""}
-                                fill={index < goldStars ? "currentColor" : "none"}
-                                key={index}
-                                size={17}
-                              />
-                            ))}
-                          </span>
-                          <b>{goldStars}/{MAX_GOLD_STARS}</b>
-                        </span>
-                        <div
-                          className={`song-card-progress${
-                            savedProgress ? " is-cleared" : ""
-                          }`}
-                        >
-                          <span className="song-card-progress-rank">
-                            <small>{savedProgress?.bestRank ? "Best rank" : "Unranked"}</small>
-                            <strong>{savedProgress?.bestRank ?? "—"}</strong>
-                            <small>
-                              {savedProgress?.bestRank
-                                ? "Performance grade"
-                                : savedProgress
-                                  ? "Complete again to rank"
-                                  : "No grade yet"}
-                            </small>
-                          </span>
-                          <span className="song-card-progress-details">
-                            <span className="song-card-progress-status">
-                              <small>Stage result</small>
-                              <b>
-                                {savedProgress && (
-                                  <Check size={16} aria-hidden="true" />
-                                )}
-                                {savedProgress ? "Cleared" : "Not cleared"}
-                              </b>
-                              <small>
-                                {savedProgress
-                                  ? `${savedProgress.completedRuns} completed ${
-                                      savedProgress.completedRuns === 1
-                                        ? "run"
-                                        : "runs"
-                                    }`
-                                  : "Full scored run required"}
-                              </small>
+                        {demoUnlocked ? (
+                          <>
+                            <span
+                              aria-label={`${goldStars} of ${MAX_GOLD_STARS} gold mastery stars earned`}
+                              className="song-card-mastery"
+                            >
+                              <small>Flow mastery</small>
+                              <span aria-hidden="true">
+                                {Array.from({ length: MAX_GOLD_STARS }, (_, index) => (
+                                  <Star
+                                    className={index < goldStars ? "is-earned" : ""}
+                                    fill={index < goldStars ? "currentColor" : "none"}
+                                    key={index}
+                                    size={17}
+                                  />
+                                ))}
+                              </span>
+                              <b>{goldStars}/{MAX_GOLD_STARS}</b>
                             </span>
-                            <span className="song-card-progress-score">
-                              <small>Personal best</small>
-                              <strong>
-                                {savedProgress
-                                  ? savedProgress.bestScore.toLocaleString()
-                                  : "No score"}
-                              </strong>
-                              <small>{savedProgress ? "Stage points" : "Play to rank"}</small>
+                            <div
+                              className={`song-card-progress${
+                                savedProgress ? " is-cleared" : ""
+                              }`}
+                            >
+                              <span className="song-card-progress-rank">
+                                <small>{savedProgress?.bestRank ? "Best rank" : "Unranked"}</small>
+                                <strong>{savedProgress?.bestRank ?? "—"}</strong>
+                                <small>
+                                  {savedProgress?.bestRank
+                                    ? "Performance grade"
+                                    : savedProgress
+                                      ? "Complete again to rank"
+                                      : "No grade yet"}
+                                </small>
+                              </span>
+                              <span className="song-card-progress-details">
+                                <span className="song-card-progress-status">
+                                  <small>Stage result</small>
+                                  <b>
+                                    {savedProgress && (
+                                      <Check size={16} aria-hidden="true" />
+                                    )}
+                                    {savedProgress ? "Cleared" : "Not cleared"}
+                                  </b>
+                                  <small>
+                                    {savedProgress
+                                      ? `${savedProgress.completedRuns} completed ${
+                                          savedProgress.completedRuns === 1
+                                            ? "run"
+                                            : "runs"
+                                        }`
+                                      : "Full scored run required"}
+                                  </small>
+                                </span>
+                                <span className="song-card-progress-score">
+                                  <small>Personal best</small>
+                                  <strong>
+                                    {savedProgress
+                                      ? savedProgress.bestScore.toLocaleString()
+                                      : "No score"}
+                                  </strong>
+                                  <small>{savedProgress ? "Stage points" : "Play to rank"}</small>
+                                </span>
+                              </span>
+                            </div>
+                          </>
+                        ) : (
+                          <span className="song-card-lock-panel">
+                            <span className="song-card-lock-icon" aria-hidden="true">
+                              <LockKeyhole size={22} />
+                            </span>
+                            <span>
+                              <strong>DEMO LOCKED</strong>
+                              <small>Unlock this track and all three charts.</small>
+                            </span>
+                            <span className="song-card-lock-cta">
+                              View full version <ArrowRight size={14} aria-hidden="true" />
                             </span>
                           </span>
-                        </div>
+                        )}
                         <Difficulty value={chart.difficulty} />
                         <div className="skill-chips">
                           {chart.skills.slice(0, 3).map((skill) => (
@@ -629,6 +702,77 @@ function SongLibrary({
             );
           })}
         </div>
+
+        {lockedFamily && (
+          <div className="purchase-gate-backdrop">
+            <button
+              aria-label="Close full-version panel"
+              className="purchase-gate-dismiss"
+              onClick={closePurchasePanel}
+              type="button"
+            />
+            <section
+              aria-label="Unlock the full version"
+              aria-modal="true"
+              className="purchase-gate"
+              ref={purchaseDialogRef}
+              role="dialog"
+              tabIndex={-1}
+            >
+              <button
+                aria-label="Close full-version panel"
+                className="purchase-gate-close"
+                onClick={closePurchasePanel}
+                type="button"
+              >
+                <X size={18} />
+              </button>
+              <div className="purchase-gate-icon" aria-hidden="true">
+                <LockKeyhole size={30} />
+              </div>
+              <div className="purchase-gate-kicker">
+                DEMO LOCKED · SONG {String(lockedFamily.courseRank).padStart(2, "0")}
+              </div>
+              <h3>Unlock {lockedFamily.title}.</h3>
+              <p>
+                Purchase the full version to open all {SONG_FAMILIES.length}
+                tracks, with Easy, Medium, and Hard charts for every song.
+              </p>
+              <ul>
+                <li>{SONG_FAMILIES.length - DEMO_SONG_FAMILIES.length} more songs</li>
+                <li>All five venues</li>
+                <li>Progress and mastery tracking</li>
+              </ul>
+              <div className="purchase-gate-actions">
+                <button
+                  className="purchase-gate-primary"
+                  onClick={() => {
+                    window.dispatchEvent(
+                      new CustomEvent("keyboard-hero:purchase-full-version", {
+                        detail: { familyId: lockedFamily.id },
+                      }),
+                    );
+                    window.location.hash = "purchase-full-version";
+                  }}
+                  type="button"
+                >
+                  Purchase full version
+                  <ArrowRight size={16} aria-hidden="true" />
+                </button>
+                <button
+                  className="purchase-gate-secondary"
+                  onClick={closePurchasePanel}
+                  type="button"
+                >
+                  Keep playing the demo
+                </button>
+              </div>
+              <small className="purchase-gate-note">
+                One demo song in each venue remains fully playable.
+              </small>
+            </section>
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1445,6 +1589,7 @@ export default function Home() {
 
   const selectSong = useCallback(
     (nextFamily: SongFamily) => {
+      if (!isDemoSongFamily(nextFamily)) return;
       pauseForLibrary();
       if (activeTrainingLesson) {
         setBackingBandForTraining(trainingReturnBackingBandRef.current);

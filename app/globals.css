@@ -3383,6 +3383,37 @@ kbd {
   border-top-color: rgba(215, 255, 63, 0.78);
 }
 
+.song-card.is-demo-song {
+  border-top-color: var(--acid);
+}
+
+.song-card.is-demo-locked {
+  border-top-color: rgba(255, 77, 130, 0.75);
+  background:
+    repeating-linear-gradient(112deg, transparent 0 22px, rgba(255, 255, 255, 0.018) 23px 24px),
+    linear-gradient(135deg, rgba(255, 77, 130, 0.06), transparent 46%),
+    #0d0d12;
+}
+
+.song-card.is-demo-locked:hover,
+.song-card.is-demo-locked:focus-visible {
+  border-color: rgba(255, 77, 130, 0.76);
+  background:
+    linear-gradient(135deg, rgba(255, 77, 130, 0.12), transparent 54%),
+    #15151c;
+}
+
+.song-card.is-demo-locked .song-card-index,
+.song-card.is-demo-locked .difficulty-dot.filled {
+  color: rgba(243, 239, 227, 0.46);
+  background: rgba(243, 239, 227, 0.3);
+}
+
+.song-card.is-demo-locked .song-card-challenge {
+  border-color: rgba(255, 77, 130, 0.55);
+  color: #ff7aa1;
+}
+
 .song-card.selected::before {
   position: absolute;
   top: 0;
@@ -3585,6 +3616,66 @@ kbd {
   text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.38);
 }
 
+.song-card-lock-panel {
+  min-height: 162px;
+  margin-top: 15px;
+  padding: 18px;
+  border: 1px solid rgba(255, 77, 130, 0.28);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: center;
+  align-items: center;
+  gap: 9px 13px;
+  color: rgba(243, 239, 227, 0.56);
+  background:
+    repeating-linear-gradient(135deg, transparent 0 12px, rgba(255, 77, 130, 0.035) 13px 14px),
+    rgba(255, 77, 130, 0.035);
+  clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+}
+
+.song-card-lock-icon {
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(255, 77, 130, 0.42);
+  display: grid;
+  place-items: center;
+  color: #ff7aa1;
+  background: rgba(255, 77, 130, 0.08);
+}
+
+.song-card-lock-panel > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.song-card-lock-panel strong {
+  color: #ff7aa1;
+  font: 400 28px/0.86 var(--font-display);
+  letter-spacing: 0.035em;
+}
+
+.song-card-lock-panel small {
+  color: rgba(243, 239, 227, 0.5);
+  font: 8px/1.4 var(--font-mono);
+  text-transform: uppercase;
+}
+
+.song-card-lock-cta {
+  grid-column: 1 / -1;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(243, 239, 227, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ink);
+  background: rgba(243, 239, 227, 0.055);
+  font: 850 8px/1 var(--font-mono);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
 .difficulty {
   margin-top: 15px;
   display: flex;
@@ -3629,6 +3720,160 @@ kbd {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.purchase-gate-backdrop {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 74% 18%, rgba(141, 104, 255, 0.18), transparent 22rem),
+    rgba(3, 3, 7, 0.88);
+  backdrop-filter: blur(12px);
+  animation: fade-in 160ms ease both;
+}
+
+.purchase-gate-dismiss {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
+
+.purchase-gate {
+  position: relative;
+  z-index: 1;
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: 38px;
+  border: 2px solid rgba(243, 239, 227, 0.24);
+  border-top: 4px solid var(--acid);
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 90% 12%, rgba(215, 255, 63, 0.09), transparent 14rem),
+    repeating-linear-gradient(112deg, transparent 0 28px, rgba(255, 255, 255, 0.018) 29px 30px),
+    #101016;
+  box-shadow: 9px 9px 0 rgba(255, 77, 130, 0.42), 0 30px 90px rgba(0, 0, 0, 0.72);
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+}
+
+.purchase-gate:focus-visible {
+  outline: 2px solid var(--acid);
+  outline-offset: -8px;
+}
+
+.purchase-gate-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(243, 239, 227, 0.24);
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  background: #08080c;
+  cursor: pointer;
+}
+
+.purchase-gate-icon {
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(215, 255, 63, 0.48);
+  display: grid;
+  place-items: center;
+  color: var(--acid);
+  background: rgba(215, 255, 63, 0.08);
+  box-shadow: 5px 5px 0 rgba(141, 104, 255, 0.36);
+}
+
+.purchase-gate-kicker {
+  margin-top: 22px;
+  color: #ff7aa1;
+  font: 850 9px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.purchase-gate h3 {
+  margin: 9px 50px 0 0;
+  font: 400 clamp(42px, 7vw, 62px)/0.82 var(--font-display);
+  letter-spacing: 0.015em;
+  text-transform: uppercase;
+}
+
+.purchase-gate > p {
+  margin: 16px 0 0;
+  color: rgba(243, 239, 227, 0.68);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.purchase-gate ul {
+  margin: 18px 0 0;
+  padding: 14px 16px 14px 32px;
+  border: 1px solid rgba(243, 239, 227, 0.14);
+  display: grid;
+  gap: 8px;
+  color: rgba(243, 239, 227, 0.72);
+  background: rgba(243, 239, 227, 0.035);
+  font: 800 9px/1.25 var(--font-mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.purchase-gate li::marker {
+  color: var(--acid);
+}
+
+.purchase-gate-actions {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.purchase-gate-primary,
+.purchase-gate-secondary {
+  min-height: 46px;
+  padding: 0 15px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: 850 9px/1 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.purchase-gate-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #09090c;
+  background: var(--acid);
+  box-shadow: 4px 4px 0 rgba(141, 104, 255, 0.55);
+}
+
+.purchase-gate-primary:hover {
+  background: #e5ff78;
+}
+
+.purchase-gate-secondary {
+  border-color: rgba(243, 239, 227, 0.22);
+  color: rgba(243, 239, 227, 0.74);
+  background: transparent;
+}
+
+.purchase-gate-note {
+  display: block;
+  margin-top: 14px;
+  color: rgba(243, 239, 227, 0.42);
+  font: 8px/1.4 var(--font-mono);
+  text-align: center;
+  text-transform: uppercase;
 }
 
 /* Beginner training room */
@@ -5435,6 +5680,22 @@ kbd {
 
   .song-card-footer {
     flex-wrap: wrap;
+  }
+
+  .purchase-gate-backdrop {
+    padding: 10px;
+  }
+
+  .purchase-gate {
+    padding: 30px 20px 22px;
+  }
+
+  .purchase-gate-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .purchase-gate-secondary {
+    min-height: 42px;
   }
 }
 

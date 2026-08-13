@@ -25,10 +25,10 @@ async function render() {
 
 test("server-renders the Keyboard Hero game shell", async () => {
   const response = await render();
-  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.equal(response.status, 200, html);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
-  const html = await response.text();
   assert.match(html, /<title>Keyboard Hero — Learn Piano Like a Headliner<\/title>/i);
   assert.match(html, /KEYBOARD HERO/);
   assert.match(html, /First Five Launch/);
@@ -169,6 +169,11 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /function ChallengeSelector/);
   assert.match(page, /<ChallengeSelector/);
   assert.match(page, /SONG_FAMILIES\.length/);
+  assert.match(page, /DEMO_SONG_FAMILIES\.length/);
+  assert.match(page, /isDemoSongFamily\(family\)/);
+  assert.match(page, /DEMO LOCKED/);
+  assert.match(page, /Purchase full version/);
+  assert.match(page, /keyboard-hero:purchase-full-version/);
   assert.match(
     page,
     /const CAREER_VENUES = \[[\s\S]*?Garage Sessions[\s\S]*?Downtown Club[\s\S]*?Festival Stage[\s\S]*?Grand Theater[\s\S]*?Arena Headliner[\s\S]*?\] as const/,
