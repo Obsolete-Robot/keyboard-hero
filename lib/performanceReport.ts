@@ -31,6 +31,7 @@ export interface PerformanceReport {
   perfectRun: boolean;
   rows: ResultRow[];
   attempts: number;
+  earlyReleases: number;
   extraMisses: number;
   missedOrUnplayed: number;
 }
@@ -201,7 +202,8 @@ export function buildPerformanceReport(
     successfulNotes === song.notes.length &&
     missedOrUnplayed === 0 &&
     score.misses === 0 &&
-    score.accuracy >= 100 - 0.000_001;
+    score.accuracy >= 100 - 0.000_001 &&
+    sustainCounts.earlyRelease === 0;
 
   const timingDetail = (count: number, nominal: string) =>
     !isTimingScored
@@ -265,6 +267,7 @@ export function buildPerformanceReport(
       perfectRun: false,
       rows,
       attempts,
+      earlyReleases: sustainCounts.earlyRelease,
       extraMisses,
       missedOrUnplayed,
     };
@@ -277,6 +280,7 @@ export function buildPerformanceReport(
     perfectRun,
     rows,
     attempts,
+    earlyReleases: sustainCounts.earlyRelease,
     extraMisses,
     missedOrUnplayed,
   };

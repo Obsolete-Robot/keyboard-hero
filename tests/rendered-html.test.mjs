@@ -589,6 +589,36 @@ test("grades the score sheet from timing, completion, and extra misses", async (
   );
   assert.equal(partialHold.perfectRun, true);
 
+  const earlyRelease = buildPerformanceReport(
+    partialHoldSong,
+    new Map([
+      [
+        "note-0",
+        {
+          ...result("note-0", "perfect"),
+          sustain: {
+            grade: "early-release",
+            heldBeats: 0.4,
+            requiredBeats: 1.5,
+            progress: 0.27,
+            pointsAwarded: 48,
+            multiplier: 1,
+          },
+        },
+      ],
+    ]),
+    score({
+      points: 1058,
+      sustainPoints: 48,
+      combo: 0,
+      bestCombo: 1,
+      hits: 1,
+    }),
+    "flow",
+  );
+  assert.equal(earlyRelease.perfectRun, false);
+  assert.equal(earlyRelease.earlyReleases, 1);
+
   const adjusted = buildPerformanceReport(
     song(1),
     new Map([

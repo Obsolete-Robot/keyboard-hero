@@ -153,6 +153,11 @@ test("attempt ownership is fully cleared for replay, seek, and loop resets", asy
   assert.match(hook, /if \(attempt\.sustainScored\) return null/);
   assert.match(
     hook,
+    /sustain\.grade === "early-release"[\s\S]*?applyPowerJudgement\(powerRef\.current, "miss"\)/,
+  );
+  assert.match(hook, /combo: breaksStreak \? 0 : currentScore\.combo/);
+  assert.match(
+    hook,
     /attempt\.phase !== "released-before-start"[\s\S]*?removePlayerNoteAttempt\(noteId, false\)/,
   );
 });

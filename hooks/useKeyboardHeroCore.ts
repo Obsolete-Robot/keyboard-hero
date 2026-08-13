@@ -1554,13 +1554,20 @@ export function useKeyboardHeroCore(
       );
       setNoteResults(resultsRef.current);
 
-      if (sustain.pointsAwarded > 0) {
+      const breaksStreak =
+        !quickLoopEnabledRef.current && sustain.grade === "early-release";
+      if (breaksStreak) {
+        commitPower(applyPowerJudgement(powerRef.current, "miss").state);
+      }
+
+      if (sustain.pointsAwarded > 0 || breaksStreak) {
         const currentScore = scoreRef.current;
         const nextScore: KeyboardHeroScore = {
           ...currentScore,
           points: currentScore.points + sustain.pointsAwarded,
           sustainPoints:
             currentScore.sustainPoints + sustain.pointsAwarded,
+          combo: breaksStreak ? 0 : currentScore.combo,
         };
         scoreRef.current = nextScore;
         setScore(nextScore);
@@ -1583,7 +1590,7 @@ export function useKeyboardHeroCore(
       );
       return feedback;
     },
-    [powerChordKeyByNoteId],
+    [commitPower, powerChordKeyByNoteId],
   );
 
   const registerEarlyReleaseMiss = useCallback(

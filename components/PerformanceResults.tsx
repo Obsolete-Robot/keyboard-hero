@@ -435,7 +435,11 @@ export default function PerformanceResults({
           <div className="results-mastery-copy">
             <span>{report.perfectRun ? "Perfect Flow run" : "Flow mastery"}</span>
             <strong>
-              {report.perfectRun ? "Gold star earned" : "Keep the clean streak going"}
+              {report.perfectRun
+                ? "Gold star earned"
+                : report.earlyReleases > 0
+                  ? "Early release broke the run"
+                  : "Keep the clean streak going"}
             </strong>
           </div>
           <span className="results-mastery-stars" aria-hidden="true">
