@@ -218,6 +218,8 @@ export interface KeyboardHeroCore {
   positionBeat: number;
   /** Rendering position, including the negative five-second pre-roll runway. */
   visualBeat: number;
+  /** Reads the frame-current transport without forcing a full React render. */
+  readVisualBeat: () => number;
   positionSeconds: number;
   isPlaying: boolean;
   /** True while the non-interactive visual tail clears the stage. */
@@ -345,6 +347,7 @@ const MIDI_TRANSPORT_DEDUP_MS = 160;
 const PRE_ROLL_SECONDS = 5;
 const POST_ROLL_MIN_SECONDS = 2.5;
 const POST_ROLL_CLEARANCE_BEATS = 1.75;
+const TRANSPORT_UI_INTERVAL_MS = 50;
 const FEEDBACK_HISTORY_LIMIT = 16;
 const COMBO_ORCHESTRATION_VELOCITY_SCALE = 0.7;
 const COMBO_ORCHESTRATION_LAYER_NAMES = [
@@ -693,6 +696,7 @@ export function useKeyboardHeroCore(
   );
   const noteOffRef = useRef<(midi: number, source?: string) => void>(() => undefined);
   const positionRef = useRef(0);
+  const visualBeatRef = useRef(0);
   const resultsRef = useRef(noteResults);
   const scoreRef = useRef<KeyboardHeroScore>(EMPTY_SCORE);
   const powerRef = useRef<KeyboardHeroPowerState>(power);
@@ -790,11 +794,14 @@ export function useKeyboardHeroCore(
     (beat: number) => {
       const next = clamp(beat, 0, song.durationBeats);
       positionRef.current = next;
+      visualBeatRef.current = next;
       setPositionBeatState(next);
       setVisualBeat(next);
     },
     [song.durationBeats],
   );
+
+  const readVisualBeat = useCallback(() => visualBeatRef.current, []);
 
   const stopListenVoices = useCallback(() => {
     const instrument = synthRef.current;
@@ -1251,7 +1258,10 @@ export function useKeyboardHeroCore(
     countInEndTimeRef.current = 0;
     preRollVisualBeatRef.current = positionRef.current;
     setCountdown(null);
-    if (!wasFinishing) setVisualBeat(positionRef.current);
+    if (!wasFinishing) {
+      visualBeatRef.current = positionRef.current;
+      setVisualBeat(positionRef.current);
+    }
     if (wasFinishing) {
       finishPower();
       setSongComplete(true);
@@ -1293,6 +1303,7 @@ export function useKeyboardHeroCore(
       ? -PRE_ROLL_SECONDS * beatRate
       : positionRef.current;
     preRollVisualBeatRef.current = preRollStartBeat;
+    visualBeatRef.current = preRollStartBeat;
     setVisualBeat(preRollStartBeat);
     setCountdown(shouldCountIn ? PRE_ROLL_SECONDS : null);
     isPlayingRef.current = true;
@@ -2773,6 +2784,7 @@ export function useKeyboardHeroCore(
     if (!isPlaying) return;
     let frame = 0;
     let previousTime = performance.now();
+    let lastUIPublishTime = Number.NEGATIVE_INFINITY;
 
     const animate = (now: number) => {
       if (!isPlayingRef.current) return;
@@ -2791,10 +2803,15 @@ export function useKeyboardHeroCore(
         );
         const postRollDuration = postRollDurationRef.current;
         const boundedSeconds = Math.min(postRollDuration, elapsedSeconds);
-        setVisualBeat(
-          song.durationBeats + boundedSeconds * postRollBeatRateRef.current,
-        );
+        const nextVisualBeat =
+          song.durationBeats + boundedSeconds * postRollBeatRateRef.current;
+        visualBeatRef.current = nextVisualBeat;
+        if (now - lastUIPublishTime >= TRANSPORT_UI_INTERVAL_MS) {
+          setVisualBeat(nextVisualBeat);
+          lastUIPublishTime = now;
+        }
         if (elapsedSeconds >= postRollDuration) {
+          setVisualBeat(nextVisualBeat);
           finishPower();
           isFinishingRef.current = false;
           isPlayingRef.current = false;
@@ -2838,7 +2855,14 @@ export function useKeyboardHeroCore(
           if (crossedPulse === 0) lastMetronomePulseRef.current = 0;
         }
         preRollVisualBeatRef.current = nextVisualBeat;
-        setVisualBeat(nextVisualBeat);
+        visualBeatRef.current = nextVisualBeat;
+        if (
+          now - lastUIPublishTime >= TRANSPORT_UI_INTERVAL_MS ||
+          remainingSeconds === 0
+        ) {
+          setVisualBeat(nextVisualBeat);
+          lastUIPublishTime = now;
+        }
         setCountdown(remainingSeconds > 0 ? afterDisplay : null);
         if (remainingSeconds === 0) {
           resolvePlayerNoteAttemptsThrough(0, millisecondsPerBeat);
@@ -2995,7 +3019,13 @@ export function useKeyboardHeroCore(
         syncBackingBand(nextBeat, currentSettings);
       }
       syncComboOrchestration(nextBeat, currentSettings);
-      commitPosition(nextBeat);
+      positionRef.current = nextBeat;
+      visualBeatRef.current = nextBeat;
+      if (now - lastUIPublishTime >= TRANSPORT_UI_INTERVAL_MS) {
+        setPositionBeatState(nextBeat);
+        setVisualBeat(nextBeat);
+        lastUIPublishTime = now;
+      }
       frame = requestAnimationFrame(animate);
     };
 
@@ -3056,6 +3086,7 @@ export function useKeyboardHeroCore(
   return {
     positionBeat,
     visualBeat,
+    readVisualBeat,
     positionSeconds,
     isPlaying,
     isFinishing,

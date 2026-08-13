@@ -1625,6 +1625,7 @@ export default function Home() {
             <KeyboardStage
               ariaLabel="Three-dimensional 25-key practice keyboard and falling note highway"
               currentBeat={hero.visualBeat}
+              currentBeatSource={hero.readVisualBeat}
               currentTime={hero.positionSeconds}
               feedback={stageFeedback}
               fingeringHands={fingeringHands}

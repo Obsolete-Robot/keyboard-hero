@@ -113,6 +113,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /Reconnect MIDI/);
   assert.match(page, /hero\.midi\.permission === "prompt"/);
   assert.match(page, /currentBeat=\{hero\.visualBeat\}/);
+  assert.match(page, /currentBeatSource=\{hero\.readVisualBeat\}/);
   assert.match(page, /First note hits the bright bar at zero/);
   assert.match(page, /hero\.feedbackEvents\.map/);
   assert.match(page, /hero\.heldNotes\.get\(note\.id\)/);
@@ -246,7 +247,12 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /powerSurgeRing/);
   assert.match(stage, /!hasCachedTransform/);
   assert.match(stage, /!Number\.isFinite\(lastStrikeWidth\)/);
-  assert.match(stage, /flareMaterial/);
+  assert.match(stage, /noteFlareBatch/);
+  assert.match(stage, /new THREE\.InstancedMesh/);
+  assert.match(stage, /const MAX_FEEDBACK_BURSTS = 24/);
+  assert.match(stage, /effectDeltaSeconds/);
+  assert.match(stage, /lowerBoundNoteStart/);
+  assert.doesNotMatch(stage, /const burstLight = new THREE\.PointLight/);
   assert.match(stage, /vertexColors: true/);
   assert.match(stage, /data-power-mode/);
   assert.match(stage, /motionQuery\.addEventListener\("change"/);
@@ -263,6 +269,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /whiteRing\.renderOrder = AIM_RENDER_ORDER \+ 2/);
   assert.match(stage, /sparks\.renderOrder = AIM_RENDER_ORDER \+ 4/);
   assert.match(stage, /marker\.group\.visible = active/);
+  assert.match(engine, /const TRANSPORT_UI_INTERVAL_MS = 50/);
+  assert.match(engine, /readVisualBeat/);
   assert.match(stage, /pressedNow && !missed && note\.state === "active"/);
   assert.match(stage, /matchedHoldStrength/);
   assert.match(stage, /reduceMotion[\s\S]*?0\.82/);
@@ -270,8 +278,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /bevelEnabled: true/);
   assert.match(stage, /nextNoteStartRef/);
   assert.match(stage, /const separationGap/);
-  assert.match(stage, /headCap/);
-  assert.match(stage, /tailCap/);
+  assert.match(stage, /noteCapBatch/);
+  assert.match(stage, /noteCapInstanceCount \+= 1/);
   assert.match(stage, /finger\?: KeyboardFinger/);
   assert.match(stage, /fingeringHands\?: readonly KeyboardStageHand\[\]/);
   assert.match(stage, /fingeringRange\?: KeyboardStageFingeringRange/);
@@ -286,7 +294,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /fingerTargetsByMidi/);
   assert.match(stage, /key\.fingerLabel\.visible = true/);
   assert.match(stage, /fingerLabelMaterial\?\.dispose\(\)/);
-  assert.match(stage, /fingerLabelTexture\?\.dispose\(\)/);
+  assert.match(stage, /keyFingerLabelTextures\.forEach\(\(texture\) => texture\.dispose\(\)\)/);
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
   assert.match(stageCss, /\.kh-stage--power/);
   assert.match(stageCss, /kh-stage-power-breathe/);

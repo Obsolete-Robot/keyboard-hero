@@ -26,6 +26,9 @@ const POST_HIT_BEATS = 1.45;
 const NOTE_GAP_MIN = 0.055;
 const AIM_SPARK_COUNT = 16;
 const AIM_RENDER_ORDER = 1200;
+const MAX_FEEDBACK_BURSTS = 24;
+const MAX_BATCHED_NOTES = 384;
+const MAX_RENDER_PIXEL_RATIO = 1.5;
 const KEY_CUE_LEAD_BEATS = 0.9;
 const KEY_CUE_LINGER_BEATS = 0.16;
 const BLACK_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
@@ -157,6 +160,8 @@ export type KeyboardStageTheme =
 export interface KeyboardStageProps {
   notes: readonly KeyboardStageNote[];
   currentBeat: number;
+  /** Optional live transport reader that keeps WebGL motion off React's UI tick. */
+  currentBeatSource?: () => number;
   currentTime?: number;
   pressedMidiNotes?: ReadonlySet<number> | readonly number[];
   /** The latest event or a short event history. Old ids are de-duplicated. */
@@ -206,24 +211,18 @@ interface KeyVisual extends KeyLayout {
   fingerLabel: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   fingerLabelMaterial: THREE.MeshBasicMaterial;
   fingerLabelKey: string | null;
+  displayColor: string;
 }
 
 interface NoteVisual {
   group: THREE.Group;
   body: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshStandardMaterial>;
-  glow: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshBasicMaterial>;
-  flare: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshBasicMaterial>;
   outline: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial>;
-  headCap: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
-  tailCap: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   bodyMaterial: THREE.MeshStandardMaterial;
-  glowMaterial: THREE.MeshBasicMaterial;
-  flareMaterial: THREE.MeshBasicMaterial;
   outlineMaterial: THREE.LineBasicMaterial;
-  capMaterial: THREE.MeshBasicMaterial;
   fingerLabel?: THREE.Sprite;
   fingerLabelMaterial?: THREE.SpriteMaterial;
-  fingerLabelTexture?: THREE.CanvasTexture;
+  renderedColor: string;
 }
 
 type AimMarkerTone = "held" | "matched" | "miss";
@@ -252,7 +251,6 @@ interface FeedbackBurst {
     THREE.LineBasicMaterial
   >;
   fracture?: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-  light: THREE.PointLight;
   age: number;
   duration: number;
   miss: boolean;
@@ -308,6 +306,29 @@ const THEME_PRESETS: Record<KeyboardStageThemeName, KeyboardStagePalette> = {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function lowerBoundNoteStart(
+  notes: readonly KeyboardStageNote[],
+  startBeat: number,
+) {
+  let low = 0;
+  let high = notes.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (notes[middle].startBeat < startBeat) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function orderNotesByStart(notes: readonly KeyboardStageNote[]) {
+  for (let index = 1; index < notes.length; index += 1) {
+    if (notes[index - 1].startBeat > notes[index].startBeat) {
+      return [...notes].sort((left, right) => left.startBeat - right.startBeat);
+    }
+  }
+  return notes;
 }
 
 function makeRoundedNoteGeometry() {
@@ -562,6 +583,7 @@ function makeTextTexture() {
 export default function KeyboardStage({
   notes,
   currentBeat,
+  currentBeatSource,
   currentTime = 0,
   pressedMidiNotes = [],
   feedback = null,
@@ -674,9 +696,10 @@ export default function KeyboardStage({
 
     return { hands, targets: [...targets.values()] };
   }, [currentBeat, fingeringHands, fingeringRange, notes]);
-  const notesRef = useRef(notes);
+  const notesRef = useRef<readonly KeyboardStageNote[]>(notes);
   const nextNoteStartRef = useRef(nextNoteStartById);
   const currentBeatRef = useRef(currentBeat);
+  const currentBeatSourceRef = useRef(currentBeatSource);
   const currentTimeRef = useRef(currentTime);
   const pressedRef = useRef(pressedMidiNotes);
   const fingeringRangeRef = useRef(fingeringRange);
@@ -696,9 +719,10 @@ export default function KeyboardStage({
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    notesRef.current = notes;
+    notesRef.current = orderNotesByStart(notes);
     nextNoteStartRef.current = nextNoteStartById;
     currentBeatRef.current = currentBeat;
+    currentBeatSourceRef.current = currentBeatSource;
     currentTimeRef.current = currentTime;
     pressedRef.current = pressedMidiNotes;
     fingeringRangeRef.current = fingeringRange;
@@ -712,6 +736,7 @@ export default function KeyboardStage({
     onKeyUpRef.current = onKeyUp;
     onReadyRef.current = onReady;
   }, [
+    currentBeatSource,
     notes,
     nextNoteStartById,
     currentBeat,
@@ -776,8 +801,16 @@ export default function KeyboardStage({
     let animationFrame = 0;
     let resizeObserver: ResizeObserver | undefined;
     let lastFrame = performance.now();
+    const profilePerformance = new URLSearchParams(window.location.search).has(
+      "profile",
+    );
+    let profileWindowStart = lastFrame;
+    let profileFrameCount = 0;
+    let profileFrameTime = 0;
+    let profileLongestFrame = 0;
+    let profileFramesOverBudget = 0;
     let lastDisplayUpdate = -Infinity;
-    let appliedTheme = "";
+    let appliedPalette: KeyboardStagePalette | null = null;
     let cameraShake = 0;
     let cameraKick = 0;
     let flashEnergy = 0;
@@ -1225,6 +1258,7 @@ export default function KeyboardStage({
         fingerLabel,
         fingerLabelMaterial,
         fingerLabelKey: null,
+        displayColor: pitchColor,
       });
     });
 
@@ -1481,8 +1515,82 @@ export default function KeyboardStage({
     const noteGeometry = makeRoundedNoteGeometry();
     const noteOutlineGeometry = new THREE.EdgesGeometry(noteGeometry, 28);
     const noteCapGeometry = new THREE.CircleGeometry(0.5, 28);
+    const noteGlowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      transparent: true,
+      opacity: 1,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const noteFlareMaterial = noteGlowMaterial.clone();
+    noteFlareMaterial.side = THREE.DoubleSide;
+    const noteCapMaterial = noteGlowMaterial.clone();
+    noteCapMaterial.side = THREE.DoubleSide;
+    noteCapMaterial.toneMapped = false;
+    const noteGlowBatch = new THREE.InstancedMesh(
+      noteGeometry,
+      noteGlowMaterial,
+      MAX_BATCHED_NOTES,
+    );
+    const noteFlareBatch = new THREE.InstancedMesh(
+      noteGeometry,
+      noteFlareMaterial,
+      MAX_BATCHED_NOTES,
+    );
+    const noteCapBatch = new THREE.InstancedMesh(
+      noteCapGeometry,
+      noteCapMaterial,
+      MAX_BATCHED_NOTES * 2,
+    );
+    [noteGlowBatch, noteFlareBatch, noteCapBatch].forEach((batch) => {
+      batch.count = 0;
+      batch.frustumCulled = false;
+      batch.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      world.add(batch);
+    });
+    noteFlareBatch.renderOrder = 17;
+    noteGlowBatch.renderOrder = 18;
+    noteCapBatch.renderOrder = 24;
+    const noteInstanceMatrix = new THREE.Matrix4();
+    const noteInstancePosition = new THREE.Vector3();
+    const noteInstanceScale = new THREE.Vector3();
+    const noteInstanceRotation = new THREE.Quaternion();
+    const noteInstanceColor = new THREE.Color();
+    const writeNoteInstance = (
+      batch: THREE.InstancedMesh,
+      index: number,
+      x: number,
+      y: number,
+      z: number,
+      scaleX: number,
+      scaleY: number,
+      scaleZ: number,
+      color: string,
+      opacity: number,
+    ) => {
+      noteInstancePosition.set(x, y, z);
+      noteInstanceScale.set(scaleX, scaleY, scaleZ);
+      noteInstanceMatrix.compose(
+        noteInstancePosition,
+        noteInstanceRotation,
+        noteInstanceScale,
+      );
+      batch.setMatrixAt(index, noteInstanceMatrix);
+      noteInstanceColor.set(color).multiplyScalar(opacity);
+      batch.setColorAt(index, noteInstanceColor);
+    };
     const noteVisuals = new Map<string | number, NoteVisual>();
+    const visibleNoteIds = new Set<string | number>();
     const feedbackBursts: FeedbackBurst[] = [];
+    const pressedByPointer = new Set<number>();
+    const sustainedMidi = new Set<number>();
+    const fingerTargetsByMidi = new Map<number, FingerGuideTarget>();
+    let appliedNotes = notesRef.current;
+    let maximumNoteDuration = appliedNotes.reduce(
+      (maximum, note) => Math.max(maximum, note.durationBeats ?? 0.28),
+      0.28,
+    );
     const successFlare = new Float32Array(KEY_COUNT);
     const missFlare = new Float32Array(KEY_COUNT);
     const matchedHoldStrength = new Float32Array(KEY_COUNT);
@@ -1505,21 +1613,6 @@ export default function KeyboardStage({
         transparent: true,
         opacity: 0.94,
       });
-      const glowMaterial = new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.16,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const flareMaterial = new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      });
       const outlineMaterial = new THREE.LineBasicMaterial({
         color: 0xffffff,
         transparent: true,
@@ -1528,18 +1621,9 @@ export default function KeyboardStage({
         depthWrite: false,
         toneMapped: false,
       });
-      const capMaterial = new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.78,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        toneMapped: false,
-      });
       const fingering = authoredFingeringForNote(note);
       const fingerLabelTexture = fingering
-        ? makeFingerLabelTexture(fingering.hand, fingering.finger)
+        ? getKeyFingerLabelTexture(fingering.hand, fingering.finger)
         : undefined;
       const fingerLabelMaterial = fingerLabelTexture
         ? new THREE.SpriteMaterial({
@@ -1551,47 +1635,32 @@ export default function KeyboardStage({
           })
         : undefined;
       const group = new THREE.Group();
-      const glow = new THREE.Mesh(noteGeometry, glowMaterial);
-      const flare = new THREE.Mesh(noteGeometry, flareMaterial);
       const bodyMesh = new THREE.Mesh(noteGeometry, bodyMaterialForNote);
       const outline = new THREE.LineSegments(
         noteOutlineGeometry,
         outlineMaterial,
       );
-      const headCap = new THREE.Mesh(noteCapGeometry, capMaterial);
-      const tailCap = new THREE.Mesh(noteCapGeometry, capMaterial);
       const fingerLabel = fingerLabelMaterial
         ? new THREE.Sprite(fingerLabelMaterial)
         : undefined;
-      flare.renderOrder = 17;
-      glow.renderOrder = 18;
       bodyMesh.renderOrder = 20;
       outline.renderOrder = 23;
-      headCap.renderOrder = 24;
-      tailCap.renderOrder = 24;
       if (fingerLabel) {
         fingerLabel.renderOrder = 30;
         fingerLabel.scale.set(0.58, 0.36, 1);
       }
-      group.add(flare, glow, bodyMesh, outline, headCap, tailCap);
+      group.add(bodyMesh, outline);
       if (fingerLabel) group.add(fingerLabel);
       world.add(group);
       const visual: NoteVisual = {
         group,
         body: bodyMesh,
-        glow,
-        flare,
         outline,
-        headCap,
-        tailCap,
         bodyMaterial: bodyMaterialForNote,
-        glowMaterial,
-        flareMaterial,
         outlineMaterial,
-        capMaterial,
         fingerLabel,
         fingerLabelMaterial,
-        fingerLabelTexture,
+        renderedColor: color,
       };
       noteVisuals.set(note.id, visual);
       return visual;
@@ -1602,12 +1671,8 @@ export default function KeyboardStage({
       if (!visual) return;
       world.remove(visual.group);
       visual.bodyMaterial.dispose();
-      visual.glowMaterial.dispose();
-      visual.flareMaterial.dispose();
       visual.outlineMaterial.dispose();
-      visual.capMaterial.dispose();
       visual.fingerLabelMaterial?.dispose();
-      visual.fingerLabelTexture?.dispose();
       noteVisuals.delete(id);
     };
 
@@ -1841,14 +1906,13 @@ export default function KeyboardStage({
       const points = new THREE.Points(geometry, material);
       rootGroup.add(points);
 
-      const burstLight = new THREE.PointLight(
-        color,
-        miss ? 4 : 25 * eventIntensity,
-        miss ? 3.5 : 6.5,
-        2,
-      );
-      burstLight.position.y = 0.5;
-      rootGroup.add(burstLight);
+      if (feedbackBursts.length >= MAX_FEEDBACK_BURSTS) {
+        const oldest = feedbackBursts.shift();
+        if (oldest) {
+          world.remove(oldest.root);
+          disposeObject(oldest.root);
+        }
+      }
 
       feedbackBursts.push({
         root: rootGroup,
@@ -1859,7 +1923,6 @@ export default function KeyboardStage({
         shockwave,
         streaks,
         fracture,
-        light: burstLight,
         age: 0,
         duration: reduceMotion ? 0.38 : miss ? 0.56 : 1.16,
         miss,
@@ -1944,9 +2007,8 @@ export default function KeyboardStage({
 
     const applyTheme = () => {
       const activePalette = paletteRef.current;
-      const signature = JSON.stringify(activePalette);
-      if (signature === appliedTheme) return;
-      appliedTheme = signature;
+      if (activePalette === appliedPalette) return;
+      appliedPalette = activePalette;
       scene.background = new THREE.Color(activePalette.background);
       if (scene.fog instanceof THREE.FogExp2) {
         scene.fog.color.set(activePalette.background);
@@ -1967,6 +2029,9 @@ export default function KeyboardStage({
         key.material.emissive.set(key.laneColor);
         key.landingMaterial.color.set(key.laneColor);
         key.laneMaterial.color.set(key.laneColor);
+        key.cueOutlineMaterial.uniforms.uColor.value.set(key.laneColor);
+        key.innerLightMaterial.uniforms.uColor.value.set(key.laneColor);
+        key.displayColor = key.laneColor;
       });
       aimMarkers.forEach((marker) => {
         marker.tone = null;
@@ -1978,6 +2043,7 @@ export default function KeyboardStage({
         material.color.set(color);
         material.emissive.set(color);
       });
+      powerSurgeMaterial.color.set(activePalette.success);
       lastDisplayUpdate = -Infinity;
     };
 
@@ -1988,7 +2054,9 @@ export default function KeyboardStage({
       viewportWidth = width;
       viewportHeight = height;
       strikeProjectionDirty = true;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8));
+      renderer.setPixelRatio(
+        Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO),
+      );
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.fov = width < 620 ? 43 : width < 900 ? 39 : 36;
@@ -2185,13 +2253,22 @@ export default function KeyboardStage({
     const animate = (now: number) => {
       if (disposed) return;
       applyMotionPreference();
-      const deltaSeconds = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000));
+      const frameDuration = now - lastFrame;
+      const deltaSeconds = Math.min(
+        0.05,
+        Math.max(0.001, frameDuration / 1000),
+      );
+      const effectDeltaSeconds = Math.min(
+        1,
+        Math.max(0.001, frameDuration / 1000),
+      );
       lastFrame = now;
       const activeIntensity = clamp(intensityRef.current, 0, 2);
-      const beat = currentBeatRef.current;
+      const beat = currentBeatSourceRef.current?.() ?? currentBeatRef.current;
       const beatFraction = ((beat % 1) + 1) % 1;
       const visibleBeats = Math.max(1, travelBeatsRef.current);
-      const pressedByPointer = new Set(pointerNotes.values());
+      pressedByPointer.clear();
+      pointerNotes.forEach((midi) => pressedByPointer.add(midi));
       const powerState = powerRef.current;
       const targetPowerEnergy = powerState.active
         ? clamp(powerState.energy, 0, 1)
@@ -2242,20 +2319,47 @@ export default function KeyboardStage({
         line.scale.y = index % 4 === 0 ? 2.2 : 1;
       });
 
-      const liveIds = new Set<string | number>();
-      const sustainedMidi = new Set<number>();
+      if (notesRef.current !== appliedNotes) {
+        appliedNotes = notesRef.current;
+        maximumNoteDuration = appliedNotes.reduce(
+          (maximum, note) => Math.max(maximum, note.durationBeats ?? 0.28),
+          0.28,
+        );
+        const liveIds = new Set(appliedNotes.map((note) => note.id));
+        noteVisuals.forEach((_, id) => {
+          if (!liveIds.has(id)) removeNoteVisual(id);
+        });
+      }
+      visibleNoteIds.clear();
+      sustainedMidi.clear();
       const labelRange = normalizeFingeringRange(fingeringRangeRef.current);
-      const fingerTargetsByMidi = new Map(
-        fingerGuideRef.current.targets.map((target) => [target.midi, target]),
+      fingerTargetsByMidi.clear();
+      fingerGuideRef.current.targets.forEach((target) => {
+        fingerTargetsByMidi.set(target.midi, target);
+      });
+      const firstVisibleNote = lowerBoundNoteStart(
+        appliedNotes,
+        beat - POST_HIT_BEATS - maximumNoteDuration,
       );
-      notesRef.current.forEach((note) => {
+      const afterLastVisibleNote = lowerBoundNoteStart(
+        appliedNotes,
+        beat + visibleBeats + 0.650_001,
+      );
+      let noteGlowInstanceCount = 0;
+      let noteFlareInstanceCount = 0;
+      let noteCapInstanceCount = 0;
+      for (
+        let noteIndex = firstVisibleNote;
+        noteIndex < afterLastVisibleNote;
+        noteIndex += 1
+      ) {
+        const note = appliedNotes[noteIndex];
         if (
           note.midi < FIRST_MIDI_NOTE ||
           note.midi >= FIRST_MIDI_NOTE + KEY_COUNT
         ) {
-          return;
+          continue;
         }
-        liveIds.add(note.id);
         const durationBeats = Math.max(0.08, note.durationBeats ?? 0.28);
         const tailBeat = note.startBeat + durationBeats;
         const visible =
@@ -2263,11 +2367,11 @@ export default function KeyboardStage({
           tailBeat >= beat - POST_HIT_BEATS;
         let visual = noteVisuals.get(note.id);
         if (!visible) {
-          if (visual) visual.group.visible = false;
-          return;
+          continue;
         }
         visual ??= createNoteVisual(note);
         visual.group.visible = true;
+        visibleNoteIds.add(note.id);
         const key = KEY_LAYOUT[note.midi - FIRST_MIDI_NOTE];
         const noteWidth = key.width * (key.isBlack ? 0.8 : 0.82);
         const nextStartBeat = nextNoteStartRef.current.get(note.id);
@@ -2350,11 +2454,9 @@ export default function KeyboardStage({
           ? 0
           : powerEnergy * (0.74 + powerPulse * 0.26);
 
-        visual.group.position.set(
-          key.x,
-          key.isBlack ? 0.7 : 0.48,
-          headZ - length / 2,
-        );
+        const noteY = key.isBlack ? 0.7 : 0.48;
+        const noteCenterZ = headZ - length / 2;
+        visual.group.position.set(key.x, noteY, noteCenterZ);
         const bodyHeight =
           (0.12 + velocity * 0.11) *
           hitBoost *
@@ -2365,40 +2467,36 @@ export default function KeyboardStage({
             holdStrength * 0.1);
         const haloLength = length + Math.min(0.07, separationGap * 0.46);
         visual.body.scale.set(noteWidth, bodyHeight, length);
-        visual.glow.scale.set(
+        const glowScaleX =
           noteWidth *
-            (1.42 +
-              motionFlare * 0.7 +
-              powerNoteBoost * 0.32 +
-              holdStrength * 0.28),
+          (1.42 +
+            motionFlare * 0.7 +
+            powerNoteBoost * 0.32 +
+            holdStrength * 0.28);
+        const glowScaleY =
           0.34 +
-            motionFlare * 0.16 +
-            powerNoteBoost * 0.08 +
-            holdStrength * 0.08,
-          haloLength,
-        );
-        visual.flare.scale.set(
+          motionFlare * 0.16 +
+          powerNoteBoost * 0.08 +
+          holdStrength * 0.08;
+        const flareScaleX =
           noteWidth *
-            (1.64 +
-              motionFlare * 0.88 +
-              (sustaining ? 0.46 : 0) +
-              powerNoteBoost * 0.48 +
-              holdStrength * 0.5),
+          (1.64 +
+            motionFlare * 0.88 +
+            (sustaining ? 0.46 : 0) +
+            powerNoteBoost * 0.48 +
+            holdStrength * 0.5);
+        const flareScaleY =
           0.42 +
-            motionFlare * 0.18 +
-            powerNoteBoost * 0.12 +
-            holdStrength * 0.12,
-          haloLength + Math.min(0.025, separationGap * 0.16),
-        );
+          motionFlare * 0.18 +
+          powerNoteBoost * 0.12 +
+          holdStrength * 0.12;
+        const flareLength =
+          haloLength + Math.min(0.025, separationGap * 0.16);
         visual.outline.scale.set(
           noteWidth * 1.025,
           bodyHeight * 1.035,
           length * 1.003,
         );
-        visual.headCap.position.set(0, 0, length / 2 + 0.007);
-        visual.tailCap.position.set(0, 0, -length / 2 - 0.007);
-        visual.headCap.scale.set(noteWidth * 0.98, bodyHeight * 1.02, 1);
-        visual.tailCap.scale.copy(visual.headCap.scale);
         const showFingerLabel =
           !missed &&
           note.state !== "hit" &&
@@ -2415,8 +2513,14 @@ export default function KeyboardStage({
           visual.fingerLabelMaterial.opacity =
             note.state === "active" ? 1 : 0.86;
         }
-        visual.bodyMaterial.color.set(renderedColor);
-        visual.bodyMaterial.emissive.set(renderedColor);
+        if (visual.renderedColor !== renderedColor) {
+          visual.bodyMaterial.color.set(renderedColor);
+          visual.bodyMaterial.emissive.set(renderedColor);
+          visual.outlineMaterial.color.set(
+            missed ? paletteRef.current.miss : 0xffffff,
+          );
+          visual.renderedColor = renderedColor;
+        }
         visual.bodyMaterial.emissiveIntensity =
           (missed ? 0.8 : 2.25 + velocity * 1.1) * hitBoost +
           successEnergy * 9 +
@@ -2424,8 +2528,7 @@ export default function KeyboardStage({
           powerNoteBoost * 4.2 +
           holdStrength * 7.2;
         visual.bodyMaterial.opacity = missed ? 0.46 : 0.96;
-        visual.glowMaterial.color.set(renderedColor);
-        visual.glowMaterial.opacity = clamp(
+        const glowOpacity = clamp(
           (missed ? 0.06 : 0.14 + activeIntensity * 0.05) * hitBoost +
             successEnergy * 0.48 +
             (sustaining ? 0.24 : 0) +
@@ -2434,17 +2537,13 @@ export default function KeyboardStage({
           0.04,
           0.92,
         );
-        visual.flareMaterial.color.set(renderedColor);
-        visual.flareMaterial.opacity = clamp(
+        const flareOpacity = clamp(
           (sustaining ? 0.2 : 0) +
             successEnergy * 0.34 +
             powerNoteBoost * 0.1 +
             holdStrength * 0.28,
           0,
           0.66,
-        );
-        visual.outlineMaterial.color.set(
-          missed ? paletteRef.current.miss : 0xffffff,
         );
         visual.outlineMaterial.opacity = clamp(
           (missed ? 0.3 : 0.52) +
@@ -2453,16 +2552,86 @@ export default function KeyboardStage({
           0.22,
           0.96,
         );
-        visual.capMaterial.color.set(renderedColor);
-        visual.capMaterial.opacity = clamp(
+        const capOpacity = clamp(
           (missed ? 0.4 : 0.7) + successEnergy * 0.12 + holdStrength * 0.2,
           0.32,
           0.96,
         );
+        if (noteGlowInstanceCount < MAX_BATCHED_NOTES) {
+          writeNoteInstance(
+            noteGlowBatch,
+            noteGlowInstanceCount,
+            key.x,
+            noteY,
+            noteCenterZ,
+            glowScaleX,
+            glowScaleY,
+            haloLength,
+            renderedColor,
+            glowOpacity,
+          );
+          noteGlowInstanceCount += 1;
+        }
+        if (
+          flareOpacity > 0.01 &&
+          noteFlareInstanceCount < MAX_BATCHED_NOTES
+        ) {
+          writeNoteInstance(
+            noteFlareBatch,
+            noteFlareInstanceCount,
+            key.x,
+            noteY,
+            noteCenterZ,
+            flareScaleX,
+            flareScaleY,
+            flareLength,
+            renderedColor,
+            flareOpacity,
+          );
+          noteFlareInstanceCount += 1;
+        }
+        if (noteCapInstanceCount + 1 < MAX_BATCHED_NOTES * 2) {
+          const capScaleX = noteWidth * 0.98;
+          const capScaleY = bodyHeight * 1.02;
+          writeNoteInstance(
+            noteCapBatch,
+            noteCapInstanceCount,
+            key.x,
+            noteY,
+            headZ + 0.007,
+            capScaleX,
+            capScaleY,
+            1,
+            renderedColor,
+            capOpacity,
+          );
+          noteCapInstanceCount += 1;
+          writeNoteInstance(
+            noteCapBatch,
+            noteCapInstanceCount,
+            key.x,
+            noteY,
+            headZ - length - 0.007,
+            capScaleX,
+            capScaleY,
+            1,
+            renderedColor,
+            capOpacity,
+          );
+          noteCapInstanceCount += 1;
+        }
+      }
+
+      noteGlowBatch.count = noteGlowInstanceCount;
+      noteFlareBatch.count = noteFlareInstanceCount;
+      noteCapBatch.count = noteCapInstanceCount;
+      [noteGlowBatch, noteFlareBatch, noteCapBatch].forEach((batch) => {
+        batch.instanceMatrix.needsUpdate = true;
+        if (batch.instanceColor) batch.instanceColor.needsUpdate = true;
       });
 
       noteVisuals.forEach((_, id) => {
-        if (!liveIds.has(id)) removeNoteVisual(id);
+        if (!visibleNoteIds.has(id)) removeNoteVisual(id);
       });
 
       keyVisuals.forEach((key, index) => {
@@ -2512,13 +2681,16 @@ export default function KeyboardStage({
             (sustaining ? 0.055 : 0) -
             key.mesh.scale.y) *
           0.28;
-        key.material.emissive.set(
-          missedEnergy > 0.08 ? paletteRef.current.miss : key.laneColor,
-        );
         const keyLightColor =
           missedEnergy > 0.08 ? paletteRef.current.miss : key.laneColor;
-        key.cueOutlineMaterial.uniforms.uColor.value.set(keyLightColor);
-        key.innerLightMaterial.uniforms.uColor.value.set(keyLightColor);
+        if (key.displayColor !== keyLightColor) {
+          key.material.emissive.set(keyLightColor);
+          key.landingMaterial.color.set(keyLightColor);
+          key.laneMaterial.color.set(keyLightColor);
+          key.cueOutlineMaterial.uniforms.uColor.value.set(keyLightColor);
+          key.innerLightMaterial.uniforms.uColor.value.set(keyLightColor);
+          key.displayColor = keyLightColor;
+        }
         const cuePulse = reduceMotion
           ? 0.72
           : 0.5 + Math.sin(now * 0.009 + index * 0.37) * 0.5;
@@ -2558,9 +2730,6 @@ export default function KeyboardStage({
             powerEnergy * (1.15 + powerPulse * 0.9) -
             key.material.emissiveIntensity) *
           0.3;
-        key.landingMaterial.color.set(
-          missedEnergy > 0.08 ? paletteRef.current.miss : key.laneColor,
-        );
         key.landingMaterial.opacity +=
           (Math.max(
             active ? 0.72 : 0,
@@ -2572,9 +2741,6 @@ export default function KeyboardStage({
           ) -
             key.landingMaterial.opacity) *
           0.3;
-        key.laneMaterial.color.set(
-          missedEnergy > 0.08 ? paletteRef.current.miss : key.laneColor,
-        );
         const baseLaneOpacity = key.isBlack
           ? 0.115
           : index % 2 === 0
@@ -2645,13 +2811,13 @@ export default function KeyboardStage({
           }
           marker.sparks.geometry.attributes.position.needsUpdate = true;
         }
-        successFlare[index] *= Math.pow(0.028, deltaSeconds);
-        missFlare[index] *= Math.pow(0.006, deltaSeconds);
+        successFlare[index] *= Math.pow(0.028, effectDeltaSeconds);
+        missFlare[index] *= Math.pow(0.006, effectDeltaSeconds);
       });
 
       for (let index = feedbackBursts.length - 1; index >= 0; index -= 1) {
         const burst = feedbackBursts[index];
-        burst.age += deltaSeconds;
+        burst.age += effectDeltaSeconds;
         const progress = burst.age / burst.duration;
         burst.points.visible = !reduceMotion;
         if (burst.shockwave) burst.shockwave.visible = !reduceMotion;
@@ -2667,12 +2833,12 @@ export default function KeyboardStage({
           ) {
             const offset = particle * 3;
             burst.velocities[offset + 1] -=
-              (burst.miss ? 0.75 : 5.2) * deltaSeconds;
-            positions[offset] += burst.velocities[offset] * deltaSeconds;
+              (burst.miss ? 0.75 : 5.2) * effectDeltaSeconds;
+            positions[offset] += burst.velocities[offset] * effectDeltaSeconds;
             positions[offset + 1] +=
-              burst.velocities[offset + 1] * deltaSeconds;
+              burst.velocities[offset + 1] * effectDeltaSeconds;
             positions[offset + 2] +=
-              burst.velocities[offset + 2] * deltaSeconds;
+              burst.velocities[offset + 2] * effectDeltaSeconds;
           }
           burst.points.geometry.attributes.position.needsUpdate = true;
         }
@@ -2717,12 +2883,9 @@ export default function KeyboardStage({
             0.92 * (1 - progress) * (1 - progress),
           );
         }
-        burst.light.intensity *= Math.pow(0.002, deltaSeconds);
-
         if (progress >= 1) {
           world.remove(burst.root);
           disposeObject(burst.root);
-          burst.light.dispose();
           feedbackBursts.splice(index, 1);
         }
       }
@@ -2795,13 +2958,11 @@ export default function KeyboardStage({
         powerSurgeRing.visible = true;
         powerSurgeRing.scale.setScalar(1 + surgeProgress * 10.5);
         powerSurgeMaterial.opacity = 0.88 * powerSurge * powerSurge;
-        powerSurge *= Math.pow(0.045, deltaSeconds);
+        powerSurge *= Math.pow(0.045, effectDeltaSeconds);
       } else {
         powerSurgeRing.visible = false;
         powerSurgeMaterial.opacity = 0;
       }
-      powerSurgeMaterial.color.set(paletteRef.current.success);
-
       primaryLight.intensity =
         9 +
         activeIntensity * 4 +
@@ -2811,7 +2972,7 @@ export default function KeyboardStage({
         8 + activeIntensity * 3 + powerEnergy * (3.2 + powerPulse * 1.8);
       renderer.toneMappingExposure =
         1.16 + powerEnergy * 0.1 + Math.min(0.08, flashEnergy * 0.018);
-      flashEnergy *= Math.pow(0.015, deltaSeconds);
+      flashEnergy *= Math.pow(0.015, effectDeltaSeconds);
 
       if (!reduceMotion) {
         const baseCameraZ =
@@ -2827,9 +2988,9 @@ export default function KeyboardStage({
         if (cameraShake > 0.001) {
           camera.position.x += (Math.random() - 0.5) * cameraShake;
           camera.position.y += (Math.random() - 0.5) * cameraShake;
-          cameraShake *= Math.pow(0.02, deltaSeconds);
+          cameraShake *= Math.pow(0.02, effectDeltaSeconds);
         }
-        cameraKick *= Math.pow(0.035, deltaSeconds);
+        cameraKick *= Math.pow(0.035, effectDeltaSeconds);
         camera.lookAt(0, cameraTargetY, -2.1);
       }
 
@@ -2841,6 +3002,36 @@ export default function KeyboardStage({
       }
 
       renderer.render(scene, camera);
+      if (profilePerformance) {
+        profileFrameCount += 1;
+        profileFrameTime += frameDuration;
+        profileLongestFrame = Math.max(profileLongestFrame, frameDuration);
+        if (frameDuration > 20) profileFramesOverBudget += 1;
+        if (now - profileWindowStart >= 1_000) {
+          canvas.dataset.performanceProfile = JSON.stringify({
+            fps: (profileFrameCount * 1_000) / (now - profileWindowStart),
+            averageFrameMs: profileFrameTime / profileFrameCount,
+            longestFrameMs: profileLongestFrame,
+            framesOverBudget: profileFramesOverBudget,
+            calls: renderer.info.render.calls,
+            triangles: renderer.info.render.triangles,
+            points: renderer.info.render.points,
+            geometries: renderer.info.memory.geometries,
+            textures: renderer.info.memory.textures,
+            programs: renderer.info.programs?.length ?? 0,
+            noteVisuals: noteVisuals.size,
+            visibleNotes: [...noteVisuals.values()].filter(
+              (visual) => visual.group.visible,
+            ).length,
+            feedbackBursts: feedbackBursts.length,
+          });
+          profileWindowStart = now;
+          profileFrameCount = 0;
+          profileFrameTime = 0;
+          profileLongestFrame = 0;
+          profileFramesOverBudget = 0;
+        }
+      }
       animationFrame = window.requestAnimationFrame(animate);
     };
 
