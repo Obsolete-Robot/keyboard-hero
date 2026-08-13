@@ -42,6 +42,7 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /Play band/);
   assert.match(html, /Band mix/);
   assert.match(html, /Intensity/);
+  assert.match(html, /Note release/);
   assert.match(html, /Practice mode/);
   assert.match(html, /Open the training room/);
   assert.match(html, /Six slow, repeatable steps from finger placement to Fr.re Jacques/);
@@ -157,6 +158,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /motionPreference=\{hero\.settings\.motionPreference\}/);
   assert.match(page, /Player piano/);
   assert.match(page, /Mute player piano/);
+  assert.match(page, /hero\.setNoteReleaseSeconds/);
+  assert.match(page, /Note sustain after releasing a key/);
   assert.match(page, /Your keys are muted/);
   assert.match(page, /showMutedPlayerPianoCue/);
   assert.match(page, /dialogRef\.current\?\.focus/);
@@ -350,6 +353,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /keyboard-hero\.midi-preferences\.v1/);
   assert.match(engine, /persistMIDIPreferences/);
   assert.match(engine, /normalizeMotionPreference/);
+  assert.match(engine, /noteReleaseSeconds/);
+  assert.match(engine, /setReleaseSeconds/);
   assert.match(engine, /dataset\.motionPreference/);
   assert.match(motionPreference, /prefers-reduced-motion: reduce/);
   assert.match(motionPreference, /preference === "full"/);

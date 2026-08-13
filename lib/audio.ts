@@ -106,6 +106,7 @@ export class KeyboardSynth {
   private accompanimentStep: number | null = null;
   private volume = 0.72;
   private accompanimentVolume = 0.58;
+  private releaseSeconds = 0.55;
   private muted = false;
   private waveform: SynthWaveform = "piano";
   private powerProfile = derivePowerModeProfile(false, 0);
@@ -264,6 +265,11 @@ export class KeyboardSynth {
 
   setWaveform(waveform: SynthWaveform): void {
     this.waveform = waveform;
+  }
+
+  setReleaseSeconds(releaseSeconds: number): void {
+    if (!Number.isFinite(releaseSeconds)) return;
+    this.releaseSeconds = Math.min(2, Math.max(0.05, releaseSeconds));
   }
 
   /**
@@ -1145,7 +1151,7 @@ export class KeyboardSynth {
   noteOff(
     voiceId: string,
     when?: number,
-    releaseSeconds = 0.18,
+    releaseSeconds?: number,
   ): void {
     const context = this.context;
     const voice = this.voices.get(voiceId);
@@ -1157,10 +1163,10 @@ export class KeyboardSynth {
       voice.cleanupTimer = undefined;
     }
     const stopAt = Math.max(context.currentTime, when ?? context.currentTime);
-    const release = Math.max(
-      0.015,
-      releaseSeconds * (this.waveform === "piano" ? 1.28 : 1),
-    );
+    const requestedRelease = releaseSeconds ?? this.releaseSeconds;
+    const release = Number.isFinite(requestedRelease)
+      ? Math.min(4, Math.max(0.015, requestedRelease))
+      : this.releaseSeconds;
     const gainParam = voice.gain.gain;
 
     // cancelAndHoldAtTime avoids a click when a short note is released during

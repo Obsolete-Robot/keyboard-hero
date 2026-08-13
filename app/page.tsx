@@ -2498,6 +2498,29 @@ export default function Home() {
                 onClick={() => hero.setSynthEnabled(!hero.settings.synthEnabled)}
               />
             </div>
+            <div className="setting-row note-release-row">
+              <label htmlFor="note-release-seconds">
+                <AudioLines size={12} aria-hidden="true" /> Note release
+              </label>
+              <input
+                aria-label="Note sustain after releasing a key"
+                aria-valuetext={`${hero.settings.noteReleaseSeconds.toFixed(2)} seconds after key release`}
+                className="compact-range note-release-range"
+                disabled={!hero.settings.synthEnabled}
+                id="note-release-seconds"
+                max={2}
+                min={0.05}
+                onChange={(event) =>
+                  hero.setNoteReleaseSeconds(Number(event.target.value))
+                }
+                step={0.05}
+                type="range"
+                value={hero.settings.noteReleaseSeconds}
+              />
+              <output htmlFor="note-release-seconds">
+                {hero.settings.noteReleaseSeconds.toFixed(2)}s
+              </output>
+            </div>
             {showMutedPlayerPianoCue && (
               <div className="setting-row">
                 <span aria-live="polite" role="status">

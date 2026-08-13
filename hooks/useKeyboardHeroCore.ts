@@ -187,6 +187,7 @@ export interface KeyboardHeroSettings {
   practiceMode: PracticeMode;
   metronomeEnabled: boolean;
   synthEnabled: boolean;
+  noteReleaseSeconds: number;
   backingBandEnabled: boolean;
   backingBandMix: number;
   backingBandIntensity: number;
@@ -254,6 +255,7 @@ export interface KeyboardHeroCore {
   setPracticeMode: (mode: PracticeMode) => void;
   setMetronomeEnabled: (enabled: boolean) => void;
   setSynthEnabled: (enabled: boolean) => void;
+  setNoteReleaseSeconds: (seconds: number) => void;
   setBackingBandEnabled: (enabled: boolean) => void;
   setBackingBandMix: (mix: number) => void;
   setBackingBandIntensity: (intensity: number) => void;
@@ -360,6 +362,7 @@ const DEFAULT_SETTINGS: KeyboardHeroSettings = {
   practiceMode: "flow",
   metronomeEnabled: true,
   synthEnabled: true,
+  noteReleaseSeconds: 0.55,
   backingBandEnabled: true,
   backingBandMix: 0.58,
   backingBandIntensity: 0.65,
@@ -541,6 +544,13 @@ function readSettings(): KeyboardHeroSettings {
       practiceMode,
       metronomeEnabled: parsed.metronomeEnabled ?? true,
       synthEnabled: parsed.synthEnabled ?? true,
+      noteReleaseSeconds: clamp(
+        Number.isFinite(Number(parsed.noteReleaseSeconds))
+          ? Number(parsed.noteReleaseSeconds)
+          : DEFAULT_SETTINGS.noteReleaseSeconds,
+        0.05,
+        2,
+      ),
       backingBandEnabled: parsed.backingBandEnabled ?? true,
       backingBandMix: clamp(
         Number.isFinite(Number(parsed.backingBandMix))
@@ -744,6 +754,9 @@ export function useKeyboardHeroCore(
       synthRef.current = new KeyboardSynth();
       synthRef.current.setAccompanimentVolume(
         settingsRef.current.backingBandMix,
+      );
+      synthRef.current.setReleaseSeconds(
+        settingsRef.current.noteReleaseSeconds,
       );
       synthRef.current.setPowerMode(
         powerRef.current.active,
@@ -1969,6 +1982,16 @@ export function useKeyboardHeroCore(
     }
   }, [stopComboOrchestration]);
 
+  const setNoteReleaseSeconds = useCallback((seconds: number) => {
+    const noteReleaseSeconds = clamp(seconds, 0.05, 2);
+    setSettings((current) => {
+      const next = { ...current, noteReleaseSeconds };
+      settingsRef.current = next;
+      return next;
+    });
+    synthRef.current?.setReleaseSeconds(noteReleaseSeconds);
+  }, []);
+
   const setBackingBandEnabled = useCallback(
     (backingBandEnabled: boolean) => {
       backingBandFailedStepRef.current = null;
@@ -2678,6 +2701,7 @@ export function useKeyboardHeroCore(
     document.documentElement.dataset.motionPreference =
       settings.motionPreference;
     synthRef.current?.setAccompanimentVolume(settings.backingBandMix);
+    synthRef.current?.setReleaseSeconds(settings.noteReleaseSeconds);
     if (!settingsReadyRef.current) {
       settingsReadyRef.current = true;
       return;
@@ -3123,6 +3147,7 @@ export function useKeyboardHeroCore(
     setPracticeMode,
     setMetronomeEnabled,
     setSynthEnabled,
+    setNoteReleaseSeconds,
     setBackingBandEnabled,
     setBackingBandMix,
     setBackingBandIntensity,

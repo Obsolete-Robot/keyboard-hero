@@ -27,13 +27,17 @@ const { getSongChart } = await import("../lib/songCatalog.ts");
 
 class FakeAudioParam {
   value = 0;
+  ramps = [];
+
+  cancelScheduledValues() {}
 
   setValueAtTime(value) {
     this.value = value;
   }
 
-  exponentialRampToValueAtTime(value) {
+  exponentialRampToValueAtTime(value, when) {
     this.value = value;
+    this.ramps.push({ value, when });
   }
 
   setTargetAtTime(value) {
@@ -63,17 +67,19 @@ class FakeScheduledSource extends FakeAudioNode {
   onended = null;
   started = false;
   stopCount = 0;
+  stopTimes = [];
   type = "sine";
 
   start() {
     this.started = true;
   }
 
-  stop() {
+  stop(when) {
     if (!this.started) {
       throw new DOMException("cannot stop before start", "InvalidStateError");
     }
     this.stopCount += 1;
+    this.stopTimes.push(when);
   }
 
   finish() {
@@ -143,6 +149,10 @@ class FakeAudioContext {
     return oscillator;
   }
 
+  createStereoPanner() {
+    return Object.assign(new FakeAudioNode(), { pan: new FakeAudioParam() });
+  }
+
   createWaveShaper() {
     return Object.assign(new FakeAudioNode(), {
       curve: null,
@@ -179,6 +189,51 @@ test("starts a Web Audio source before scheduling its stop", () => {
     ["start", 1.25],
     ["stop", 4.5],
   ]);
+});
+
+test("the live note release setting controls the key-up fade", async () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  FakeAudioContext.instances = [];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { AudioContext: FakeAudioContext },
+    writable: true,
+  });
+  globalThis.setTimeout = () => 0;
+  globalThis.clearTimeout = () => undefined;
+
+  const synth = new KeyboardSynth();
+  try {
+    await synth.resume();
+    synth.setReleaseSeconds(0.75);
+    assert.equal(synth.noteOn("keyboard:KeyQ:60", 60, 0.8), true);
+
+    const context = FakeAudioContext.instances.at(-1);
+    const bodyOscillator = context?.oscillators[0];
+    const partialGain = bodyOscillator?.connections[0];
+    const voiceGain = partialGain?.connections[0];
+    synth.noteOff("keyboard:KeyQ:60");
+
+    assert.ok(
+      Math.abs(voiceGain.gain.ramps.at(-1).when - 1.75) < 0.000_001,
+      "the outer voice fades for the selected release duration",
+    );
+    assert.ok(
+      Math.abs(bodyOscillator.stopTimes.at(-1) - 1.775) < 0.000_001,
+      "the oscillator remains alive through the release tail",
+    );
+  } finally {
+    await synth.dispose();
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    if (originalWindow) {
+      Object.defineProperty(globalThis, "window", originalWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
+    }
+  }
 });
 
 test("metronome one-shots disconnect their complete node chain on ended", async () => {
