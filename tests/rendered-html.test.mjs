@@ -251,6 +251,13 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /new THREE\.InstancedMesh/);
   assert.match(stage, /const MAX_FEEDBACK_BURSTS = 24/);
   assert.match(stage, /effectDeltaSeconds/);
+  assert.match(stage, /effect-warmup-perfect/);
+  assert.match(stage, /effect-warmup-miss/);
+  assert.match(stage, /batch\.setColorAt\(0, warmupInstanceColor\)/);
+  assert.match(stage, /const effectWarmupBursts = feedbackBursts\.splice\(0\)/);
+  assert.match(stage, /renderer[\s\S]*?\.compileAsync\(scene, camera\)/);
+  assert.match(stage, /canvas\.dataset\.effectsReady = "ready"/);
+  assert.match(stage, /effectWarmupPromise\.then/);
   assert.match(stage, /lowerBoundNoteStart/);
   assert.doesNotMatch(stage, /const burstLight = new THREE\.PointLight/);
   assert.match(stage, /vertexColors: true/);

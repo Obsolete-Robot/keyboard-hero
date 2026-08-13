@@ -1199,6 +1199,7 @@ export default function KeyboardStage({
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         depthWrite: false,
+        toneMapped: false,
       });
       const landing = new THREE.Mesh(landingGeometry, landingMaterial);
       landing.rotation.x = -Math.PI / 2;
@@ -1525,8 +1526,10 @@ export default function KeyboardStage({
     });
     const noteFlareMaterial = noteGlowMaterial.clone();
     noteFlareMaterial.side = THREE.DoubleSide;
+    noteFlareMaterial.forceSinglePass = true;
     const noteCapMaterial = noteGlowMaterial.clone();
     noteCapMaterial.side = THREE.DoubleSide;
+    noteCapMaterial.forceSinglePass = true;
     noteCapMaterial.toneMapped = false;
     const noteGlowBatch = new THREE.InstancedMesh(
       noteGeometry,
@@ -1714,6 +1717,7 @@ export default function KeyboardStage({
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         depthWrite: false,
+        toneMapped: false,
       });
       const ring = new THREE.Mesh(
         new THREE.RingGeometry(0.13, miss ? 0.2 : 0.25, 32),
@@ -1733,6 +1737,7 @@ export default function KeyboardStage({
           blending: THREE.AdditiveBlending,
           side: THREE.DoubleSide,
           depthWrite: false,
+          toneMapped: false,
         });
         echoRing = new THREE.Mesh(
           new THREE.RingGeometry(0.29, 0.35, 44),
@@ -1754,6 +1759,7 @@ export default function KeyboardStage({
           blending: THREE.AdditiveBlending,
           side: THREE.DoubleSide,
           depthWrite: false,
+          toneMapped: false,
         });
         shockwave = new THREE.Mesh(
           new THREE.RingGeometry(0.22, 0.3, 40),
@@ -1904,6 +1910,7 @@ export default function KeyboardStage({
         depthWrite: false,
       });
       const points = new THREE.Points(geometry, material);
+      points.frustumCulled = false;
       rootGroup.add(points);
 
       if (feedbackBursts.length >= MAX_FEEDBACK_BURSTS) {
@@ -2249,6 +2256,71 @@ export default function KeyboardStage({
     }
     resize();
     drawDisplay();
+
+    const warmupInstanceColor = new THREE.Color(0xffffff);
+    [noteGlowBatch, noteFlareBatch, noteCapBatch].forEach((batch) => {
+      // setColorAt lazily creates the instanced color attribute. Creating it
+      // before compilation ensures the first feedback flare cannot introduce
+      // a new shader variant while the player is performing.
+      batch.setColorAt(0, warmupInstanceColor);
+      batch.count = 0;
+    });
+    const warmupMotionPreference = reduceMotion;
+    reduceMotion = false;
+    createFeedbackBurst({
+      id: "effect-warmup-perfect",
+      midi: FIRST_MIDI_NOTE,
+      kind: "perfect",
+      strength: 1,
+    });
+    createFeedbackBurst({
+      id: "effect-warmup-miss",
+      midi: FIRST_MIDI_NOTE,
+      kind: "miss",
+      strength: 1,
+    });
+    reduceMotion = warmupMotionPreference;
+    const effectWarmupBursts = feedbackBursts.splice(0);
+    effectWarmupBursts.forEach((burst) => {
+      burst.root.traverse((object) => {
+        object.frustumCulled = false;
+        const renderable = object as THREE.Object3D & {
+          material?: THREE.Material | THREE.Material[];
+        };
+        const materials = Array.isArray(renderable.material)
+          ? renderable.material
+          : renderable.material
+            ? [renderable.material]
+            : [];
+        materials.forEach((material) => {
+          const transparentMaterial = material as THREE.Material & {
+            opacity?: number;
+          };
+          if (transparentMaterial.opacity !== undefined) {
+            transparentMaterial.opacity = 0;
+          }
+        });
+      });
+    });
+    successFlare.fill(0);
+    missFlare.fill(0);
+    cameraShake = 0;
+    cameraKick = 0;
+    flashEnergy = 0;
+    canvas.dataset.effectsReady = "warming";
+    const effectWarmupPromise = renderer
+      .compileAsync(scene, camera)
+      .then(() => {
+        if (!disposed) canvas.dataset.effectsReady = "ready";
+      })
+      .catch(() => {
+        // Rendering remains functional if parallel shader compilation is not
+        // available; the normal first render will compile as a fallback.
+        if (!disposed) canvas.dataset.effectsReady = "fallback";
+      })
+      .finally(() => {
+        effectWarmupBursts.forEach((burst) => world.remove(burst.root));
+      });
 
     const animate = (now: number) => {
       if (disposed) return;
@@ -3035,17 +3107,21 @@ export default function KeyboardStage({
       animationFrame = window.requestAnimationFrame(animate);
     };
 
-    const statusTimer = window.setTimeout(() => {
+    let statusTimer: number | undefined;
+    void effectWarmupPromise.then(() => {
       if (disposed) return;
-      setWebglError(null);
-      setReady(true);
-      onReadyRef.current?.();
-    }, 0);
+      statusTimer = window.setTimeout(() => {
+        if (disposed) return;
+        setWebglError(null);
+        setReady(true);
+        onReadyRef.current?.();
+      }, 0);
+    });
     animationFrame = window.requestAnimationFrame(animate);
 
     return () => {
       disposed = true;
-      window.clearTimeout(statusTimer);
+      if (statusTimer !== undefined) window.clearTimeout(statusTimer);
       window.cancelAnimationFrame(animationFrame);
       resizeObserver?.disconnect();
       window.removeEventListener("resize", resize);
@@ -3057,6 +3133,10 @@ export default function KeyboardStage({
       canvas.removeEventListener("webglcontextlost", handleContextLoss);
       motionQuery.removeEventListener("change", handleMotionPreferenceChange);
       pointerNotes.forEach((midi) => onKeyUpRef.current?.(midi));
+      effectWarmupBursts.forEach((burst) => {
+        world.remove(burst.root);
+        disposeObject(burst.root);
+      });
       disposeObject(scene);
       noteGeometry.dispose();
       noteOutlineGeometry.dispose();
