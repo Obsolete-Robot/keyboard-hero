@@ -93,7 +93,7 @@ test("ships the guided beginner training room and slow-practice controls", async
 });
 
 test("ships the finished game rather than starter assets", async () => {
-  const [page, appCss, layout, packageJson, songs, stage, stageCss, results, report, engine, midiInputs] = await Promise.all([
+  const [page, appCss, layout, packageJson, songs, stage, stageCss, results, report, engine, midiInputs, motionPreference] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -105,6 +105,7 @@ test("ships the finished game rather than starter assets", async () => {
     readFile(new URL("../lib/performanceReport.ts", import.meta.url), "utf8"),
     readFile(new URL("../hooks/useKeyboardHeroCore.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/midiInputs.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/motionPreference.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /useKeyboardHeroCore/);
@@ -148,6 +149,9 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /hero\.setBackingBandEnabled/);
   assert.match(page, /hero\.setBackingBandMix/);
   assert.match(page, /hero\.setBackingBandIntensity/);
+  assert.match(page, /hero\.setMotionPreference/);
+  assert.match(page, /Full animation/);
+  assert.match(page, /motionPreference=\{hero\.settings\.motionPreference\}/);
   assert.match(page, /Player piano/);
   assert.match(page, /Mute player piano/);
   assert.match(page, /Your keys are muted/);
@@ -202,6 +206,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(appCss, /@keyframes feedback-toast-slide/);
   assert.match(appCss, /power-stage-breathe/);
   assert.match(appCss, /prefers-reduced-motion: reduce/);
+  assert.match(appCss, /data-motion-preference="full"/);
+  assert.match(appCss, /data-motion-preference="reduced"/);
   assert.match(appCss, /--arena-header-height: clamp\(58px, 9dvh, 70px\)/);
   assert.match(appCss, /--arena-transport-height: clamp\(124px, 18dvh, 148px\)/);
   assert.match(appCss, /--arena-primary-width: 100%/);
@@ -245,6 +251,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /data-power-mode/);
   assert.match(stage, /motionQuery\.addEventListener\("change"/);
   assert.match(stage, /motionQuery\.removeEventListener\("change"/);
+  assert.match(stage, /shouldReduceMotion/);
   assert.match(stage, /cameraTargetY = width >= 620 && width < 900 \? 0\.7 : 0\.1/);
   assert.match(stage, /camera\.lookAt\(0, cameraTargetY, -2\.1\)/);
   assert.match(stage, /holdProgress\?: number/);
@@ -280,13 +287,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /key\.fingerLabel\.visible = true/);
   assert.match(stage, /fingerLabelMaterial\?\.dispose\(\)/);
   assert.match(stage, /fingerLabelTexture\?\.dispose\(\)/);
-  assert.match(stage, /SUGGESTED FINGERING/);
-  assert.match(stage, /left: \[5, 4, 3, 2, 1\]/);
-  assert.match(stage, /right: \[1, 2, 3, 4, 5\]/);
-  assert.match(stage, /T thumb · I index · M middle · R ring · P pinky/);
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
-  assert.match(stageCss, /\.kh-stage__finger-guide \{/);
-  assert.match(stageCss, /\.kh-stage__finger\.is-upcoming/);
   assert.match(stageCss, /\.kh-stage--power/);
   assert.match(stageCss, /kh-stage-power-breathe/);
   assert.match(results, /Official score sheet/);
@@ -304,7 +305,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /playPerformanceCue/);
   assert.match(results, /Play it again/);
   assert.match(results, /Back to practice/);
-  assert.match(results, /prefers-reduced-motion: reduce/);
+  assert.match(results, /resolveReducedMotion\(motionPreference\)/);
   assert.match(results, /dialogRef\.current\?\.focus/);
   assert.match(results, /createPortal/);
   assert.match(results, /fitResultsSheet/);
@@ -314,7 +315,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(appCss, /\.results-fit-scaler \{[\s\S]*?transform: scale\(var\(--results-fit-scale, 1\)\)/);
   assert.match(appCss, /\.performance-results-card \{[\s\S]*?max-height: none;[\s\S]*?overflow: visible;/);
   assert.match(report, /grade: "A\+"/);
-  assert.match(report, /TIMING_WEIGHTS/);
+  assert.match(report, /targetScoreForSong/);
+  assert.match(report, /scorePercent \* accuracyRate/);
   assert.match(report, /extraMisses/);
   assert.match(engine, /requestMIDIAccess/);
   assert.match(engine, /midiTransportInputsRef/);
@@ -322,6 +324,11 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(engine, /decodeMIDITransportPress/);
   assert.match(engine, /keyboard-hero\.midi-preferences\.v1/);
   assert.match(engine, /persistMIDIPreferences/);
+  assert.match(engine, /normalizeMotionPreference/);
+  assert.match(engine, /dataset\.motionPreference/);
+  assert.match(motionPreference, /prefers-reduced-motion: reduce/);
+  assert.match(motionPreference, /preference === "full"/);
+  assert.match(motionPreference, /preference === "reduced"/);
   assert.match(engine, /autoMIDIConnectAttemptedRef/);
   assert.match(engine, /void connectMIDI\(\)/);
   assert.match(

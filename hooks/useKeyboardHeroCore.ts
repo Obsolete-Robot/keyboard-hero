@@ -27,6 +27,10 @@ import {
 } from "@/lib/midiTransport";
 import { isDownbeatPulse, pulseIndexAtBeat } from "@/lib/meter";
 import {
+  normalizeMotionPreference,
+  type MotionPreference,
+} from "@/lib/motionPreference";
+import {
   applyPowerJudgement,
   authoredChordGroupId,
   completePowerMode,
@@ -180,6 +184,7 @@ export interface KeyboardHeroSettings {
   backingBandEnabled: boolean;
   backingBandMix: number;
   backingBandIntensity: number;
+  motionPreference: MotionPreference;
   latencyMs: number;
 }
 
@@ -238,6 +243,7 @@ export interface KeyboardHeroCore {
   setBackingBandEnabled: (enabled: boolean) => void;
   setBackingBandMix: (mix: number) => void;
   setBackingBandIntensity: (intensity: number) => void;
+  setMotionPreference: (preference: MotionPreference) => void;
   playBackingBand: () => void;
   pauseBackingBand: () => void;
   toggleBackingBandPlayback: () => void;
@@ -336,6 +342,7 @@ const DEFAULT_SETTINGS: KeyboardHeroSettings = {
   backingBandEnabled: true,
   backingBandMix: 0.58,
   backingBandIntensity: 0.65,
+  motionPreference: "system",
   latencyMs: 0,
 };
 const EMPTY_SCORE: KeyboardHeroScore = {
@@ -528,6 +535,7 @@ function readSettings(): KeyboardHeroSettings {
         0,
         1,
       ),
+      motionPreference: normalizeMotionPreference(parsed.motionPreference),
       latencyMs: clamp(Number(parsed.latencyMs) || 0, -250, 250),
     };
   } catch {
@@ -1818,6 +1826,15 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     });
   }, []);
 
+  const setMotionPreference = useCallback((preference: MotionPreference) => {
+    const motionPreference = normalizeMotionPreference(preference);
+    setSettings((current) => {
+      const next = { ...current, motionPreference };
+      settingsRef.current = next;
+      return next;
+    });
+  }, []);
+
   const setLatencyMs = useCallback((latencyMs: number) => {
     setSettings((current) => ({
       ...current,
@@ -2477,6 +2494,8 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
 
   useEffect(() => {
     settingsRef.current = settings;
+    document.documentElement.dataset.motionPreference =
+      settings.motionPreference;
     synthRef.current?.setAccompanimentVolume(settings.backingBandMix);
     if (!settingsReadyRef.current) {
       settingsReadyRef.current = true;
@@ -2900,6 +2919,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     setBackingBandEnabled,
     setBackingBandMix,
     setBackingBandIntensity,
+    setMotionPreference,
     playBackingBand,
     pauseBackingBand,
     toggleBackingBandPlayback,

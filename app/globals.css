@@ -2670,6 +2670,17 @@ input:focus-visible {
   opacity: 0.7;
 }
 
+.motion-effects-select {
+  min-width: 132px;
+}
+
+.motion-effects-note {
+  margin: 5px 0 9px;
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  font: 8px/1.45 var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
 .midi-channel-row {
   min-height: 52px;
 }
@@ -5824,9 +5835,9 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  :root:not([data-motion-preference="full"]) *,
+  :root:not([data-motion-preference="full"]) *::before,
+  :root:not([data-motion-preference="full"]) *::after {
     scroll-behavior: auto !important;
     animation-delay: 0ms !important;
     animation-duration: 0.01ms !important;
@@ -5834,6 +5845,81 @@ kbd {
     transition-duration: 0.01ms !important;
   }
 
+  :root:not([data-motion-preference="full"]) :is(
+    .score-value,
+    .score-delta,
+    .combo-value,
+    .power-meter,
+    .power-meter-track i,
+    .stage-encouragement,
+    .encouragement-kicker,
+    .stage-encouragement > strong,
+    .encouragement-detail,
+    .encouragement-points,
+    .finale-status,
+    .performance-results-overlay,
+    .performance-results-card,
+    .results-sheet-rule,
+    .results-ledger-row,
+    .results-stage-points strong,
+    .results-test-block,
+    .results-grade-burst,
+    .results-grade-stamp,
+    .results-feedback,
+    .results-actions
+  ) {
+    opacity: 1 !important;
+    filter: none !important;
+    transform: none !important;
+    animation: none !important;
+  }
+
+  :root:not([data-motion-preference="full"]) .performance-feedback-toast {
+    transform: none !important;
+    animation: feedback-toast-fade 900ms ease-out both !important;
+  }
+
+  :root:not([data-motion-preference="full"]) .stage-wrap.is-power-mode::before {
+    opacity: 0.88;
+    filter: none;
+    animation: none !important;
+  }
+
+  :root:not([data-motion-preference="full"]) .results-grade-burst {
+    opacity: 0.16 !important;
+  }
+
+  :root:not([data-motion-preference="full"]) :is(
+    .stage-encouragement,
+    .finale-status
+  ) {
+    transform: translateX(-50%) !important;
+  }
+
+  :root:not([data-motion-preference="full"]) .stage-encouragement > strong {
+    transform: skewX(-5deg) !important;
+  }
+
+  :root:not([data-motion-preference="full"]) .encouragement-points {
+    transform: translateY(-50%) rotate(4deg) !important;
+  }
+
+  :root:not([data-motion-preference="full"]) .results-grade-stamp {
+    transform: rotate(-7deg) !important;
+  }
+}
+
+:root[data-motion-preference="reduced"] *,
+:root[data-motion-preference="reduced"] *::before,
+:root[data-motion-preference="reduced"] *::after {
+  scroll-behavior: auto !important;
+  animation-delay: 0ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+:root[data-motion-preference="reduced"] :is(
   .score-value,
   .score-delta,
   .combo-value,
@@ -5854,42 +5940,44 @@ kbd {
   .results-grade-burst,
   .results-grade-stamp,
   .results-feedback,
-  .results-actions {
-    opacity: 1 !important;
-    filter: none !important;
-    transform: none !important;
-    animation: none !important;
-  }
+  .results-actions
+) {
+  opacity: 1 !important;
+  filter: none !important;
+  transform: none !important;
+  animation: none !important;
+}
 
-  .performance-feedback-toast {
-    transform: none !important;
-    animation: feedback-toast-fade 900ms ease-out both !important;
-  }
+:root[data-motion-preference="reduced"] .performance-feedback-toast {
+  transform: none !important;
+  animation: feedback-toast-fade 900ms ease-out both !important;
+}
 
-  .stage-wrap.is-power-mode::before {
-    opacity: 0.88;
-    filter: none;
-    animation: none !important;
-  }
+:root[data-motion-preference="reduced"] .stage-wrap.is-power-mode::before {
+  opacity: 0.88;
+  filter: none;
+  animation: none !important;
+}
 
-  .results-grade-burst {
-    opacity: 0.16 !important;
-  }
+:root[data-motion-preference="reduced"] .results-grade-burst {
+  opacity: 0.16 !important;
+}
 
+:root[data-motion-preference="reduced"] :is(
   .stage-encouragement,
-  .finale-status {
-    transform: translateX(-50%) !important;
-  }
+  .finale-status
+) {
+  transform: translateX(-50%) !important;
+}
 
-  .stage-encouragement > strong {
-    transform: skewX(-5deg) !important;
-  }
+:root[data-motion-preference="reduced"] .stage-encouragement > strong {
+  transform: skewX(-5deg) !important;
+}
 
-  .encouragement-points {
-    transform: translateY(-50%) rotate(4deg) !important;
-  }
+:root[data-motion-preference="reduced"] .encouragement-points {
+  transform: translateY(-50%) rotate(4deg) !important;
+}
 
-  .results-grade-stamp {
-    transform: rotate(-7deg) !important;
-  }
+:root[data-motion-preference="reduced"] .results-grade-stamp {
+  transform: rotate(-7deg) !important;
 }

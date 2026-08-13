@@ -45,6 +45,7 @@ import {
   type SustainFeedback,
 } from "@/hooks/useKeyboardHeroCore";
 import { resolveMIDITransportIntent } from "@/lib/midiTransport";
+import type { MotionPreference } from "@/lib/motionPreference";
 import { buildPerformanceReport } from "@/lib/performanceReport";
 import { scoreRateForSettings } from "@/lib/scoreDifficulty";
 import {
@@ -1621,6 +1622,7 @@ export default function Home() {
                 2,
                 0.85 + hero.score.combo / 28 + hero.power.energy * 0.22,
               )}
+              motionPreference={hero.settings.motionPreference}
               notes={stageNotes}
               onKeyDown={(midi, velocity) => hero.noteOn(midi, velocity, "stage")}
               onKeyUp={(midi) => hero.noteOff(midi, "stage")}
@@ -2267,6 +2269,33 @@ export default function Home() {
           <section className="coach-section">
             <div className="section-kicker">Stage setup</div>
             <div className="setting-row">
+              <label htmlFor="motion-effects-select">
+                <Sparkles size={12} aria-hidden="true" /> Motion effects
+              </label>
+              <select
+                aria-describedby="motion-effects-note"
+                className="mini-select motion-effects-select"
+                id="motion-effects-select"
+                onChange={(event) =>
+                  hero.setMotionPreference(
+                    event.target.value as MotionPreference,
+                  )
+                }
+                value={hero.settings.motionPreference}
+              >
+                <option value="system">System setting</option>
+                <option value="full">Full animation</option>
+                <option value="reduced">Reduced motion</option>
+              </select>
+            </div>
+            <p className="motion-effects-note" id="motion-effects-note">
+              {hero.settings.motionPreference === "full"
+                ? "Hit sparks, stage movement, and score reveals stay on."
+                : hero.settings.motionPreference === "reduced"
+                  ? "Keeps the stage steady and removes particle bursts."
+                  : "Uses this device's accessibility setting."}
+            </p>
+            <div className="setting-row">
               <span><Volume2 size={12} aria-hidden="true" /> Metronome</span>
               <button
                 aria-label="Toggle metronome"
@@ -2538,6 +2567,7 @@ export default function Home() {
 
       {songComplete && !hero.quickLoopEnabled && (
         <PerformanceResults
+          motionPreference={hero.settings.motionPreference}
           noteResults={hero.noteResults}
           onCue={hero.playPerformanceCue}
           onPractice={hero.restart}

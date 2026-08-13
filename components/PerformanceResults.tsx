@@ -17,6 +17,10 @@ import type {
   PracticeMode,
 } from "@/hooks/useKeyboardHeroCore";
 import type { PerformanceCue } from "@/lib/audio";
+import {
+  resolveReducedMotion,
+  type MotionPreference,
+} from "@/lib/motionPreference";
 import { buildPerformanceReport } from "@/lib/performanceReport";
 import type { Song } from "@/lib/songs";
 
@@ -33,23 +37,17 @@ const RESULT_REVEAL = {
   actionsReady: 4600,
 } as const;
 
-function prefersReducedMotion() {
-  return (
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
-
 function AnimatedNumber({
   value,
   delay,
   duration = 900,
+  reduceMotion,
 }: {
   value: number;
   delay: number;
   duration?: number;
+  reduceMotion: boolean;
 }) {
-  const [reduceMotion] = useState(prefersReducedMotion);
   const [displayValue, setDisplayValue] = useState(reduceMotion ? value : 0);
 
   useEffect(() => {
@@ -80,6 +78,7 @@ interface PerformanceResultsProps {
   noteResults: ReadonlyMap<string, NoteResult>;
   score: KeyboardHeroScore;
   practiceMode: PracticeMode;
+  motionPreference: MotionPreference;
   onCue: (cue: PerformanceCue, variant?: number) => void;
   onReplay: () => void;
   onPractice: () => void;
@@ -90,6 +89,7 @@ export default function PerformanceResults({
   noteResults,
   score,
   practiceMode,
+  motionPreference,
   onCue,
   onReplay,
   onPractice,
@@ -98,7 +98,9 @@ export default function PerformanceResults({
   const fitFrameRef = useRef<HTMLDivElement>(null);
   const fitScalerRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
-  const [reduceMotion] = useState(prefersReducedMotion);
+  const [reduceMotion] = useState(() =>
+    resolveReducedMotion(motionPreference),
+  );
   const [revealReady, setRevealReady] = useState(reduceMotion);
   const report = useMemo(
     () => buildPerformanceReport(song, noteResults, score, practiceMode),
@@ -322,6 +324,7 @@ export default function PerformanceResults({
                 value={score.points}
                 delay={RESULT_REVEAL.stagePoints}
                 duration={RESULT_REVEAL.stagePointsDuration}
+                reduceMotion={reduceMotion}
               />
             </strong>
           </div>
@@ -359,6 +362,7 @@ export default function PerformanceResults({
                       value={row.points}
                       delay={RESULT_REVEAL.rowStart + index * RESULT_REVEAL.rowStep}
                       duration={620}
+                      reduceMotion={reduceMotion}
                     />
                   </>
                 )}
@@ -380,6 +384,7 @@ export default function PerformanceResults({
                       value={report.testScore}
                       delay={RESULT_REVEAL.testScore}
                       duration={RESULT_REVEAL.testScoreDuration}
+                      reduceMotion={reduceMotion}
                     />
                   </strong>
                   <small aria-hidden="true">/100</small>

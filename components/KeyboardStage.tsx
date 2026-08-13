@@ -8,6 +8,10 @@ import {
   type CSSProperties,
 } from "react";
 import * as THREE from "three";
+import {
+  shouldReduceMotion,
+  type MotionPreference,
+} from "@/lib/motionPreference";
 import "./KeyboardStage.css";
 
 const FIRST_MIDI_NOTE = 48;
@@ -160,6 +164,8 @@ export interface KeyboardStageProps {
   theme?: KeyboardStageTheme;
   /** 0 removes ambient motion; 1 is the authored look; values up to 2 add juice. */
   intensity?: number;
+  /** System follows the OS; full and reduced explicitly override it. */
+  motionPreference?: MotionPreference;
   /** Earned combo energy. Active Power Mode lasts until the combo breaks. */
   power?: KeyboardStagePowerState;
   /** Number of upcoming beats visible on the highway. */
@@ -446,27 +452,6 @@ interface FingerGuideTarget {
   state: "active" | "upcoming";
 }
 
-const FINGER_NAMES: Readonly<Record<KeyboardFinger, string>> = {
-  1: "Thumb",
-  2: "Index",
-  3: "Middle",
-  4: "Ring",
-  5: "Pinky",
-};
-
-const FINGER_ABBREVIATIONS: Readonly<Record<KeyboardFinger, string>> = {
-  1: "T",
-  2: "I",
-  3: "M",
-  4: "R",
-  5: "P",
-};
-
-const FINGERS_BY_HAND: Readonly<Record<GuideHand, readonly KeyboardFinger[]>> = {
-  left: [5, 4, 3, 2, 1],
-  right: [1, 2, 3, 4, 5],
-};
-
 function authoredFingeringForNote(
   note: KeyboardStageNote,
 ): { hand: GuideHand; finger: KeyboardFinger } | null {
@@ -582,6 +567,7 @@ export default function KeyboardStage({
   feedback = null,
   theme = "electric",
   intensity = 1,
+  motionPreference = "system",
   power = DEFAULT_POWER_STATE,
   travelBeats = 8,
   fingeringHands,
@@ -698,6 +684,7 @@ export default function KeyboardStage({
   const palette = useMemo(() => resolvePalette(theme), [theme]);
   const paletteRef = useRef(palette);
   const intensityRef = useRef(intensity);
+  const motionPreferenceRef = useRef(motionPreference);
   const powerRef = useRef(power);
   const travelBeatsRef = useRef(travelBeats);
   const onKeyDownRef = useRef(onKeyDown);
@@ -718,6 +705,7 @@ export default function KeyboardStage({
     fingerGuideRef.current = fingerGuide;
     paletteRef.current = palette;
     intensityRef.current = intensity;
+    motionPreferenceRef.current = motionPreference;
     powerRef.current = power;
     travelBeatsRef.current = travelBeats;
     onKeyDownRef.current = onKeyDown;
@@ -733,6 +721,7 @@ export default function KeyboardStage({
     fingerGuide,
     palette,
     intensity,
+    motionPreference,
     power,
     travelBeats,
     onKeyDown,
@@ -815,7 +804,10 @@ export default function KeyboardStage({
       Number.POSITIVE_INFINITY,
     );
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let reduceMotion = motionQuery.matches;
+    let reduceMotion = shouldReduceMotion(
+      motionPreferenceRef.current,
+      motionQuery.matches,
+    );
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 80);
     camera.position.set(0, 8.9, 12.1);
@@ -2007,8 +1999,13 @@ export default function KeyboardStage({
       camera.updateProjectionMatrix();
     };
 
-    const handleMotionPreferenceChange = (event: MediaQueryListEvent) => {
-      reduceMotion = event.matches;
+    const applyMotionPreference = () => {
+      const nextReduceMotion = shouldReduceMotion(
+        motionPreferenceRef.current,
+        motionQuery.matches,
+      );
+      if (nextReduceMotion === reduceMotion) return;
+      reduceMotion = nextReduceMotion;
       ambientParticles.visible = !reduceMotion;
       if (!reduceMotion) return;
 
@@ -2047,6 +2044,8 @@ export default function KeyboardStage({
       camera.lookAt(0, cameraTargetY, -2.1);
       strikeProjectionDirty = true;
     };
+
+    const handleMotionPreferenceChange = () => applyMotionPreference();
 
     const updateStrikeZoneProjection = () => {
       const strikeZone = strikeZoneRef.current;
@@ -2185,6 +2184,7 @@ export default function KeyboardStage({
 
     const animate = (now: number) => {
       if (disposed) return;
+      applyMotionPreference();
       const deltaSeconds = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000));
       lastFrame = now;
       const activeIntensity = clamp(intensityRef.current, 0, 2);
