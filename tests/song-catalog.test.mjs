@@ -12,6 +12,9 @@ const {
 } = await import("../lib/songCatalog.ts");
 const { MIDI_MAX, MIDI_MIN, validateSong } = await import("../lib/songs.ts");
 const { buildSongFingeringGuide } = await import("../lib/fingering.ts");
+const { buildComboOrchestrationLayers } = await import(
+  "../lib/comboOrchestration.ts"
+);
 const {
   deriveHarmonyAtBeat,
   generateAccompanimentEvents,
@@ -132,6 +135,36 @@ test("exports exactly the same 105 unique charts as the family lookup", () => {
     new Set(resolvedSongs.map((song) => song.id)),
     "ALL_SONG_CHARTS must contain each chart returned by getSongChart exactly once",
   );
+});
+
+test("every Easy and Medium chart has a non-empty harder Power Mode orchestration", () => {
+  for (const family of SONG_FAMILIES) {
+    const easyLayers = buildComboOrchestrationLayers(
+      family.charts.easy.notes,
+      "easy",
+      family.charts.medium.notes,
+      family.charts.hard.notes,
+    );
+    const mediumLayers = buildComboOrchestrationLayers(
+      family.charts.medium.notes,
+      "medium",
+      [],
+      family.charts.hard.notes,
+    );
+
+    assert.ok(
+      easyLayers.shared.length + easyLayers.mediumOnly.length > 0,
+      `${family.id} Easy needs audible Medium additions`,
+    );
+    assert.ok(
+      easyLayers.shared.length + easyLayers.hardOnly.length > 0,
+      `${family.id} Easy needs audible Hard additions`,
+    );
+    assert.ok(
+      mediumLayers.hardOnly.length > 0,
+      `${family.id} Medium needs audible Hard additions`,
+    );
+  }
 });
 
 test("every chart and note is valid, unique, in range, and playable", () => {

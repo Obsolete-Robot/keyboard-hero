@@ -659,7 +659,18 @@ export default function Home() {
   const activeTrainingSection = activeTrainingLesson
     ? getTrainingSection(activeTrainingLesson, trainingSectionId)
     : null;
-  const hero = useKeyboardHeroCore(song);
+  const comboOrchestration = useMemo(
+    () =>
+      song === regularSong && challengeLevel !== "hard"
+        ? {
+            challengeLevel,
+            mediumChart: selectedSongFamily.charts.medium,
+            hardChart: selectedSongFamily.charts.hard,
+          }
+        : undefined,
+    [challengeLevel, regularSong, selectedSongFamily.charts, song],
+  );
+  const hero = useKeyboardHeroCore(song, comboOrchestration);
   const scoreRate = scoreRateForSettings(
     hero.settings.practiceMode,
     hero.settings.tempoScale,

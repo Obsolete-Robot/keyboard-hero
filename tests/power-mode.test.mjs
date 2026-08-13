@@ -9,6 +9,18 @@ import {
   latchChordScoreMultiplier,
   pointsForJudgement,
 } from "../lib/powerMode.ts";
+import {
+  buildComboOrchestrationLayers,
+  comboOrchestrationMix,
+} from "../lib/comboOrchestration.ts";
+
+const orchestrationNote = (id, midi, startBeat, durationBeats = 1) => ({
+  id,
+  midi,
+  startBeat,
+  durationBeats,
+  velocity: 90,
+});
 
 test("grade-weighted hits fill the meter and activate exactly once across a chord", () => {
   let power = createPowerModeState();
@@ -149,4 +161,83 @@ test("song completion clears live power without erasing earned activations", () 
   assert.equal(power.charge, 0);
   assert.equal(power.multiplier, 1);
   assert.equal(power.activations, 1);
+});
+
+test("Easy orchestration separates Medium bridge notes from the eventual Hard chart", () => {
+  const player = [orchestrationNote("easy-c", 60, 0)];
+  const medium = [
+    orchestrationNote("medium-c", 60, 0),
+    orchestrationNote("medium-e", 64, 0),
+    orchestrationNote("medium-f", 65, 1),
+  ];
+  const hard = [
+    orchestrationNote("hard-c", 60, 0),
+    orchestrationNote("hard-e", 64, 0, 2),
+    orchestrationNote("hard-g", 67, 1),
+  ];
+
+  const layers = buildComboOrchestrationLayers(
+    player,
+    "easy",
+    medium,
+    hard,
+  );
+  assert.deepEqual(layers.shared.map((note) => note.id), ["medium-e"]);
+  assert.deepEqual(layers.mediumOnly.map((note) => note.id), ["medium-f"]);
+  assert.deepEqual(layers.hardOnly.map((note) => note.id), ["hard-g"]);
+});
+
+test("Medium orchestration adds only attacks absent from the player's chart", () => {
+  const player = [
+    orchestrationNote("medium-c", 60, 0),
+    orchestrationNote("medium-e", 64, 0),
+  ];
+  const hard = [
+    orchestrationNote("hard-c", 60, 0),
+    orchestrationNote("hard-e", 64, 0),
+    orchestrationNote("hard-g", 67, 0),
+  ];
+
+  const layers = buildComboOrchestrationLayers(
+    player,
+    "medium",
+    [],
+    hard,
+  );
+  assert.deepEqual(layers.shared, []);
+  assert.deepEqual(layers.mediumOnly, []);
+  assert.deepEqual(layers.hardOnly.map((note) => note.id), ["hard-g"]);
+});
+
+test("Power streak mix grows Easy through Medium into Hard and drops on a miss", () => {
+  assert.deepEqual(comboOrchestrationMix("easy", 40, false), {
+    shared: 0,
+    mediumOnly: 0,
+    hardOnly: 0,
+  });
+
+  const mediumEntry = comboOrchestrationMix("easy", 9, true);
+  assert.ok(mediumEntry.shared > 0);
+  assert.ok(mediumEntry.mediumOnly > 0);
+  assert.equal(mediumEntry.hardOnly, 0);
+
+  const hardEntry = comboOrchestrationMix("easy", 16, true);
+  assert.ok(hardEntry.hardOnly > 0);
+  assert.ok(hardEntry.mediumOnly < hardEntry.shared);
+
+  assert.deepEqual(comboOrchestrationMix("easy", 32, true), {
+    shared: 1,
+    mediumOnly: 0,
+    hardOnly: 1,
+  });
+
+  const mediumPower = comboOrchestrationMix("medium", 9, true);
+  assert.equal(mediumPower.shared, 0);
+  assert.equal(mediumPower.mediumOnly, 0);
+  assert.ok(mediumPower.hardOnly > 0);
+  assert.deepEqual(comboOrchestrationMix("hard", 40, true), {
+    shared: 0,
+    mediumOnly: 0,
+    hardOnly: 0,
+  });
 });

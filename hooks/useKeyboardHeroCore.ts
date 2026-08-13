@@ -14,6 +14,12 @@ import {
   transportSubdivisionAtBeat,
 } from "@/lib/audioScheduling";
 import {
+  buildComboOrchestrationLayers,
+  comboOrchestrationMix,
+  type ComboOrchestrationChallenge,
+  type ComboOrchestrationLayers,
+} from "@/lib/comboOrchestration";
+import {
   isValidMIDICalibrationSpan,
   mapMIDINoteToKeyboardRange,
   normalizeMIDICalibrationEntries,
@@ -188,6 +194,12 @@ export interface KeyboardHeroSettings {
   latencyMs: number;
 }
 
+export interface KeyboardHeroComboOrchestration {
+  challengeLevel: ComboOrchestrationChallenge;
+  mediumChart?: Song;
+  hardChart?: Song;
+}
+
 export interface KeyboardHeroBackingBandState {
   active: boolean;
   /** True while the independent free-play groove is running. */
@@ -334,6 +346,12 @@ const PRE_ROLL_SECONDS = 5;
 const POST_ROLL_MIN_SECONDS = 2.5;
 const POST_ROLL_CLEARANCE_BEATS = 1.75;
 const FEEDBACK_HISTORY_LIMIT = 16;
+const COMBO_ORCHESTRATION_VELOCITY_SCALE = 0.7;
+const COMBO_ORCHESTRATION_LAYER_NAMES = [
+  "shared",
+  "mediumOnly",
+  "hardOnly",
+] as const satisfies readonly (keyof ComboOrchestrationLayers)[];
 const DEFAULT_SETTINGS: KeyboardHeroSettings = {
   tempoScale: 1,
   practiceMode: "flow",
@@ -557,7 +575,10 @@ function resultFor(
   };
 }
 
-export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
+export function useKeyboardHeroCore(
+  song: Song,
+  comboOrchestration?: KeyboardHeroComboOrchestration,
+): KeyboardHeroCore {
   const [settings, setSettings] = useState<KeyboardHeroSettings>(DEFAULT_SETTINGS);
   const [positionBeat, setPositionBeatState] = useState(0);
   const [visualBeat, setVisualBeat] = useState(0);
@@ -619,6 +640,23 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     }
     return keys;
   }, [song.id, song.notes]);
+  const comboOrchestrationChallenge =
+    comboOrchestration?.challengeLevel ?? "hard";
+  const comboOrchestrationLayers = useMemo(
+    () =>
+      buildComboOrchestrationLayers(
+        song.notes,
+        comboOrchestrationChallenge,
+        comboOrchestration?.mediumChart?.notes,
+        comboOrchestration?.hardChart?.notes,
+      ),
+    [
+      comboOrchestration?.hardChart?.notes,
+      comboOrchestration?.mediumChart?.notes,
+      comboOrchestrationChallenge,
+      song.notes,
+    ],
+  );
 
   const synthRef = useRef<KeyboardSynth | null>(null);
   const midiAccessRef = useRef<MIDIAccessLike | null>(null);
@@ -678,6 +716,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
   );
   const playerNoteIdBySourceRef = useRef<Map<string, string>>(new Map());
   const listenVoicesRef = useRef<Set<string>>(new Set());
+  const comboOrchestrationVoicesRef = useRef<
+    Record<keyof ComboOrchestrationLayers, Set<string>>
+  >({
+    shared: new Set(),
+    mediumOnly: new Set(),
+    hardOnly: new Set(),
+  });
   const lastMetronomePulseRef = useRef<number | null>(null);
   const feedbackSequenceRef = useRef(0);
   const midiTransportSequenceRef = useRef(0);
@@ -762,6 +807,110 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     }
     listenVoicesRef.current.clear();
   }, []);
+
+  const stopComboOrchestration = useCallback((immediate = true) => {
+    const instrument = synthRef.current;
+    for (const layerName of COMBO_ORCHESTRATION_LAYER_NAMES) {
+      const activeIds = comboOrchestrationVoicesRef.current[layerName];
+      for (const noteId of activeIds) {
+        try {
+          instrument?.noteOff(
+            `combo-orchestration:${layerName}:${noteId}`,
+            undefined,
+            immediate ? 0.035 : 0.12,
+          );
+        } catch {
+          // A broken supplemental voice must never interrupt the chart.
+        }
+      }
+      activeIds.clear();
+    }
+  }, []);
+
+  const syncComboOrchestration = useCallback(
+    (beat: number, currentSettings: KeyboardHeroSettings) => {
+      const mix = comboOrchestrationMix(
+        comboOrchestrationChallenge,
+        scoreRef.current.combo,
+        powerRef.current.active,
+      );
+      if (
+        !currentSettings.synthEnabled ||
+        currentSettings.practiceMode === "listen" ||
+        COMBO_ORCHESTRATION_LAYER_NAMES.every(
+          (layerName) => mix[layerName] <= 0.001,
+        )
+      ) {
+        stopComboOrchestration(false);
+        return;
+      }
+
+      let instrument: KeyboardSynth;
+      try {
+        instrument = synth();
+      } catch {
+        stopComboOrchestration(true);
+        return;
+      }
+      if (instrument.state !== "running") {
+        stopComboOrchestration(true);
+        return;
+      }
+
+      for (const layerName of COMBO_ORCHESTRATION_LAYER_NAMES) {
+        const layerMix = mix[layerName];
+        const activeIds = comboOrchestrationVoicesRef.current[layerName];
+        if (layerMix <= 0.001) {
+          for (const noteId of activeIds) {
+            try {
+              instrument.noteOff(
+                `combo-orchestration:${layerName}:${noteId}`,
+                undefined,
+                0.12,
+              );
+            } catch {
+              // Clearing the voice ledger remains authoritative.
+            }
+          }
+          activeIds.clear();
+          continue;
+        }
+
+        reconcileScheduledVoices(
+          comboOrchestrationLayers[layerName],
+          beat,
+          activeIds,
+          (note) => {
+            const authoredVelocity = (note.velocity ?? 90) / 127;
+            instrument.noteOn(
+              `combo-orchestration:${layerName}:${note.id}`,
+              note.midi,
+              clamp(
+                authoredVelocity *
+                  layerMix *
+                  COMBO_ORCHESTRATION_VELOCITY_SCALE,
+                0.03,
+                0.82,
+              ),
+            );
+          },
+          (note) => {
+            instrument.noteOff(
+              `combo-orchestration:${layerName}:${note.id}`,
+              undefined,
+              0.1,
+            );
+          },
+        );
+      }
+    },
+    [
+      comboOrchestrationChallenge,
+      comboOrchestrationLayers,
+      stopComboOrchestration,
+      synth,
+    ],
+  );
 
   const syncListenVoices = useCallback(
     (beat: number) => {
@@ -1109,12 +1258,14 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     }
     lastMetronomePulseRef.current = null;
     stopListenVoices();
+    stopComboOrchestration(true);
     stopBackingBand(true);
   }, [
     cancelMIDICalibration,
     clearPlayerNoteAttempts,
     finishPower,
     stopBackingBand,
+    stopComboOrchestration,
     stopListenVoices,
   ]);
 
@@ -1207,6 +1358,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         Math.abs(destination - positionRef.current) > 0.000_001;
       clearPlayerNoteAttempts();
       stopListenVoices();
+      stopComboOrchestration(true);
       stopBackingBand(true);
       isFinishingRef.current = false;
       postRollStartTimeRef.current = 0;
@@ -1229,6 +1381,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       resetScore,
       song.durationBeats,
       stopBackingBand,
+      stopComboOrchestration,
       stopListenVoices,
     ],
   );
@@ -1757,6 +1910,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         settingsRef.current.practiceMode !== "listen" &&
         practiceMode === "listen"
       ) {
+        stopComboOrchestration(false);
         resetPower();
       }
       if (practiceMode !== settingsRef.current.practiceMode) {
@@ -1772,7 +1926,13 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       });
       if (practiceMode === "listen" && !isPlayingRef.current) play();
     },
-    [play, resetPower, resetScore, stopListenVoices],
+    [
+      play,
+      resetPower,
+      resetScore,
+      stopComboOrchestration,
+      stopListenVoices,
+    ],
   );
 
   const setMetronomeEnabled = useCallback((metronomeEnabled: boolean) => {
@@ -1785,8 +1945,11 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       settingsRef.current = next;
       return next;
     });
-    if (!synthEnabled) synthRef.current?.allNotesOff(true);
-  }, []);
+    if (!synthEnabled) {
+      synthRef.current?.allNotesOff(true);
+      stopComboOrchestration(true);
+    }
+  }, [stopComboOrchestration]);
 
   const setBackingBandEnabled = useCallback(
     (backingBandEnabled: boolean) => {
@@ -2780,6 +2943,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
             (activeLoop.enabled ? activeLoop.startBeat : 0) +
             (nextBeat - loopEnd);
           stopListenVoices();
+          stopComboOrchestration(true);
           stopBackingBand(true);
           if (currentSettings.practiceMode !== "listen") {
             if (shouldQuickLoop) {
@@ -2808,6 +2972,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
           }
           commitPosition(song.durationBeats);
           stopListenVoices();
+          stopComboOrchestration(false);
           stopBackingBand(false);
           isFinishingRef.current = true;
           postRollStartTimeRef.current = now;
@@ -2829,6 +2994,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       } else {
         syncBackingBand(nextBeat, currentSettings);
       }
+      syncComboOrchestration(nextBeat, currentSettings);
       commitPosition(nextBeat);
       frame = requestAnimationFrame(animate);
     };
@@ -2847,8 +3013,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
     resetScore,
     song,
     stopBackingBand,
+    stopComboOrchestration,
     stopListenVoices,
     syncBackingBand,
+    syncComboOrchestration,
     syncListenVoices,
   ]);
 
@@ -2869,9 +3037,10 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       } catch {
         // Disposal below remains authoritative if the effects graph is broken.
       }
+      stopComboOrchestration(true);
       void synthRef.current?.dispose();
     },
-    [],
+    [stopComboOrchestration],
   );
 
   const positionSeconds = useMemo(
