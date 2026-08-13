@@ -387,8 +387,11 @@ export default function PerformanceResults({
               )}
             </div>
             <span className="results-test-note">
-              Timing across {song.notes.length} chart notes
-              {report.extraMisses > 0 ? " · extras count as zero" : ""}
+              {practiceMode === "wait"
+                ? "Timing is unscored in Wait mode"
+                : `${score.points.toLocaleString()} of ${report.targetScore.toLocaleString()} song target${
+                    report.extraMisses > 0 ? " · extras count as zero" : ""
+                  }`}
             </span>
           </div>
 

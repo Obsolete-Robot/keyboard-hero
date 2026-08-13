@@ -1752,7 +1752,9 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
         resetPower();
       }
       if (practiceMode !== settingsRef.current.practiceMode) {
-        clearPlayerNoteAttempts();
+        // Do not let timing-free Wait judgements carry into a ranked Flow run,
+        // or let already-earned Flow points survive a switch into Wait.
+        resetScore();
       }
       settingsRef.current = { ...settingsRef.current, practiceMode };
       setSettings((current) => {
@@ -1762,7 +1764,7 @@ export function useKeyboardHeroCore(song: Song): KeyboardHeroCore {
       });
       if (practiceMode === "listen" && !isPlayingRef.current) play();
     },
-    [clearPlayerNoteAttempts, play, resetPower, stopListenVoices],
+    [play, resetPower, resetScore, stopListenVoices],
   );
 
   const setMetronomeEnabled = useCallback((metronomeEnabled: boolean) => {

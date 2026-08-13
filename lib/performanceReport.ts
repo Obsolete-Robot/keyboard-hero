@@ -4,6 +4,7 @@ import type {
   PracticeMode,
 } from "@/hooks/useKeyboardHeroCore";
 import type { Song } from "@/lib/songs";
+import { targetScoreForSong } from "./scoreDifficulty.ts";
 
 export type ResultTone =
   | "legendary"
@@ -26,18 +27,12 @@ export interface PerformanceReport {
   message: string;
   tone: ResultTone;
   testScore: number | null;
+  targetScore: number;
   rows: ResultRow[];
   attempts: number;
   extraMisses: number;
   missedOrUnplayed: number;
 }
-
-export const TIMING_WEIGHTS = {
-  perfect: 100,
-  great: 95,
-  good: 82,
-  miss: 0,
-} as const;
 
 function reportCopy(testScore: number) {
   if (testScore >= 97) {
@@ -145,6 +140,7 @@ export function buildPerformanceReport(
   score: KeyboardHeroScore,
   mode: PracticeMode,
 ): PerformanceReport {
+  const isTimingScored = mode === "flow";
   const counts = { perfect: 0, great: 0, good: 0, miss: 0 };
   const timingPoints = { perfect: 0, great: 0, good: 0 };
   const sustainCounts = { full: 0, partial: 0, earlyRelease: 0 };
@@ -154,7 +150,7 @@ export function buildPerformanceReport(
     const result = noteResults.get(note.id);
     if (!result) continue;
     counts[result.grade] += 1;
-    if (result.grade !== "miss") {
+    if (isTimingScored && result.grade !== "miss") {
       const nominalPoints =
         result.grade === "perfect"
           ? 1000
@@ -186,37 +182,38 @@ export function buildPerformanceReport(
     0,
     score.points - basePoints - sustainPoints,
   );
-  const weightedTiming =
-    counts.perfect * TIMING_WEIGHTS.perfect +
-    counts.great * TIMING_WEIGHTS.great +
-    counts.good * TIMING_WEIGHTS.good;
-  const gradedAttempts = song.notes.length + extraMisses;
-  const testScore = gradedAttempts
-    ? Math.round(weightedTiming / gradedAttempts)
-    : 0;
+  const targetScore = targetScoreForSong(song);
+  const scorePercent =
+    targetScore > 0 ? (score.points / targetScore) * 100 : 0;
+  const accuracyRate = Math.min(1, Math.max(0, score.accuracy / 100));
+  const testScore =
+    isTimingScored
+      ? Math.min(100, Math.round(scorePercent * accuracyRate))
+      : 0;
+
+  const timingDetail = (count: number, nominal: string) =>
+    !isTimingScored
+      ? `${count} notes · unscored in ${mode === "wait" ? "Wait" : "Listen"} mode`
+      : hasDifficultyAdjustedPoints
+        ? `${count} notes · tempo adjusted`
+        : `${count} × ${nominal}`;
 
   const rows: ResultRow[] = [
     {
       label: "Perfect timing",
-      detail: hasDifficultyAdjustedPoints
-        ? `${counts.perfect} notes · mode + tempo adjusted`
-        : `${counts.perfect} × 1,000`,
+      detail: timingDetail(counts.perfect, "1,000"),
       points: timingPoints.perfect,
       tone: "perfect",
     },
     {
       label: "Great timing",
-      detail: hasDifficultyAdjustedPoints
-        ? `${counts.great} notes · mode + tempo adjusted`
-        : `${counts.great} × 700`,
+      detail: timingDetail(counts.great, "700"),
       points: timingPoints.great,
       tone: "great",
     },
     {
       label: "Good timing",
-      detail: hasDifficultyAdjustedPoints
-        ? `${counts.good} notes · mode + tempo adjusted`
-        : `${counts.good} × 450`,
+      detail: timingDetail(counts.good, "450"),
       points: timingPoints.good,
       tone: "good",
     },
@@ -249,9 +246,10 @@ export function buildPerformanceReport(
       grade: "DEMO",
       gradeLabel: "Demo",
       title: "Demo complete",
-      message: "You heard the full arrangement. Switch to Flow or Wait to earn your score.",
+      message: "You heard the full arrangement. Switch to Flow to earn a score.",
       tone: "practice",
       testScore: null,
+      targetScore,
       rows,
       attempts,
       extraMisses,
@@ -262,6 +260,7 @@ export function buildPerformanceReport(
   return {
     ...reportCopy(testScore),
     testScore,
+    targetScore,
     rows,
     attempts,
     extraMisses,

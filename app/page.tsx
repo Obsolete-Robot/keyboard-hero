@@ -134,7 +134,7 @@ function modeCopy(mode: "flow" | "wait" | "listen") {
   if (mode === "wait") {
     return {
       title: "No note left behind",
-      body: "The song holds its place until you land the right key. Build the motion first; timing comes next.",
+      body: "The song holds its place until you land the right key. Wait is unscored—build the motion first, then switch to Flow for timing.",
       tone: "warn",
     };
   }

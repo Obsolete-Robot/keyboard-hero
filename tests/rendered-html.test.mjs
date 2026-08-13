@@ -429,9 +429,12 @@ test("grades the score sheet from timing, completion, and extra misses", async (
   );
 
   const song = (count) => ({
+    bpm: 120,
     notes: Array.from({ length: count }, (_, index) => ({
       id: `note-${index}`,
       midi: 60 + index,
+      startBeat: index,
+      durationBeats: 0.5,
     })),
   });
   const result = (id, grade) => ({ id, midi: 60, grade, offsetMs: 0 });
@@ -457,8 +460,8 @@ test("grades the score sheet from timing, completion, and extra misses", async (
     score({ points: 2460, combo: 3, bestCombo: 3, hits: 3 }),
     "flow",
   );
-  assert.equal(headliner.testScore, 97);
-  assert.equal(headliner.grade, "A+");
+  assert.equal(headliner.testScore, 80);
+  assert.equal(headliner.grade, "B−");
   assert.equal(
     headliner.rows.reduce((total, row) => total + row.points, 0),
     2460,
@@ -470,8 +473,18 @@ test("grades the score sheet from timing, completion, and extra misses", async (
     score({ points: 710, combo: 1, bestCombo: 1, hits: 1 }),
     "flow",
   );
-  assert.equal(allGreat.testScore, 95);
-  assert.equal(allGreat.grade, "A");
+  assert.equal(allGreat.testScore, 70);
+  assert.equal(allGreat.grade, "C−");
+
+  const targetRun = buildPerformanceReport(
+    song(1),
+    new Map([["note-0", result("note-0", "perfect")]]),
+    score({ points: 1010, combo: 1, bestCombo: 1, hits: 1 }),
+    "flow",
+  );
+  assert.equal(targetRun.targetScore, 1010);
+  assert.equal(targetRun.testScore, 100);
+  assert.equal(targetRun.grade, "A+");
 
   const held = buildPerformanceReport(
     song(1),
@@ -524,10 +537,10 @@ test("grades the score sheet from timing, completion, and extra misses", async (
       ],
     ]),
     score({ points: 126, combo: 1, bestCombo: 1, hits: 1 }),
-    "wait",
+    "flow",
   );
   assert.equal(adjusted.rows[0].points, 125);
-  assert.match(adjusted.rows[0].detail, /mode \+ tempo adjusted/);
+  assert.match(adjusted.rows[0].detail, /tempo adjusted/);
   assert.equal(
     adjusted.rows.reduce((total, row) => total + row.points, 0),
     126,
@@ -536,11 +549,13 @@ test("grades the score sheet from timing, completion, and extra misses", async (
   const skipped = buildPerformanceReport(
     song(2),
     new Map([["note-0", result("note-0", "perfect")]]),
-    score({ points: 1010, combo: 1, bestCombo: 1, hits: 1 }),
+    score({ combo: 1, bestCombo: 1, hits: 1 }),
     "wait",
   );
-  assert.equal(skipped.testScore, 50);
+  assert.equal(skipped.testScore, 0);
   assert.equal(skipped.grade, "F");
+  assert.equal(skipped.rows[0].points, 0);
+  assert.match(skipped.rows[0].detail, /unscored in Wait mode/);
   assert.equal(skipped.missedOrUnplayed, 1);
 
   const spammed = buildPerformanceReport(
