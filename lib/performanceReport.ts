@@ -5,6 +5,7 @@ import type {
 } from "@/hooks/useKeyboardHeroCore";
 import type { Song } from "@/lib/songs";
 import { targetScoreForSong } from "./scoreDifficulty.ts";
+import { sustainRequirement } from "./sustainScoring.ts";
 
 export type ResultTone =
   | "legendary"
@@ -28,6 +29,7 @@ export interface PerformanceReport {
   tone: ResultTone;
   testScore: number | null;
   targetScore: number;
+  perfectRun: boolean;
   rows: ResultRow[];
   attempts: number;
   extraMisses: number;
@@ -145,9 +147,17 @@ export function buildPerformanceReport(
   const timingPoints = { perfect: 0, great: 0, good: 0 };
   const sustainCounts = { full: 0, partial: 0, earlyRelease: 0 };
   let hasDifficultyAdjustedPoints = false;
+  let allRequiredSustainsFull = true;
+  const millisecondsPerBeat = 60_000 / song.bpm;
 
   for (const note of song.notes) {
     const result = noteResults.get(note.id);
+    if (
+      sustainRequirement(note.durationBeats, millisecondsPerBeat).eligible &&
+      result?.sustain?.grade !== "full"
+    ) {
+      allRequiredSustainsFull = false;
+    }
     if (!result) continue;
     counts[result.grade] += 1;
     if (isTimingScored && result.grade !== "miss") {
@@ -186,10 +196,23 @@ export function buildPerformanceReport(
   const scorePercent =
     targetScore > 0 ? (score.points / targetScore) * 100 : 0;
   const accuracyRate = Math.min(1, Math.max(0, score.accuracy / 100));
+  const successfulNotes = counts.perfect + counts.great + counts.good;
+  const completionRate = song.notes.length > 0
+    ? Math.min(1, successfulNotes / song.notes.length)
+    : 0;
   const testScore =
     isTimingScored
       ? Math.min(100, Math.round(scorePercent * accuracyRate))
-      : 0;
+      : mode === "wait"
+        ? Math.floor(86 * completionRate * accuracyRate)
+        : 0;
+  const perfectRun =
+    mode === "flow" &&
+    successfulNotes === song.notes.length &&
+    missedOrUnplayed === 0 &&
+    score.misses === 0 &&
+    score.accuracy >= 100 - 0.000_001 &&
+    allRequiredSustainsFull;
 
   const timingDetail = (count: number, nominal: string) =>
     !isTimingScored
@@ -250,6 +273,7 @@ export function buildPerformanceReport(
       tone: "practice",
       testScore: null,
       targetScore,
+      perfectRun: false,
       rows,
       attempts,
       extraMisses,
@@ -261,6 +285,7 @@ export function buildPerformanceReport(
     ...reportCopy(testScore),
     testScore,
     targetScore,
+    perfectRun,
     rows,
     attempts,
     extraMisses,

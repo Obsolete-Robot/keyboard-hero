@@ -3426,6 +3426,47 @@ kbd {
   font: 10px/1.4 var(--font-mono);
 }
 
+.song-card-mastery {
+  margin-top: 11px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 211, 73, 0.22);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  color: rgba(243, 239, 227, 0.42);
+  background: rgba(255, 211, 73, 0.035);
+}
+
+.song-card-mastery > small,
+.song-card-mastery > b {
+  font: 850 7px/1 var(--font-mono);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.song-card-mastery > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.song-card-mastery svg {
+  color: rgba(243, 239, 227, 0.2);
+  filter: none;
+}
+
+.song-card-mastery svg.is-earned {
+  color: #ffd349;
+  filter: drop-shadow(0 0 5px rgba(255, 211, 73, 0.52));
+}
+
+.song-card-mastery > b {
+  color: #ffd349;
+}
+
 .song-card-progress {
   position: relative;
   min-height: 104px;

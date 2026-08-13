@@ -19,6 +19,7 @@ test("records independent completion progress for each song difficulty", () => {
     "easy",
     1_250,
     "B+",
+    true,
   );
   const hard = recordSongCompletion(
     easy,
@@ -32,11 +33,13 @@ test("records independent completion progress for each song difficulty", () => {
     completedRuns: 1,
     bestScore: 1_250,
     bestRank: "B+",
+    perfectRuns: 1,
   });
   assert.deepEqual(getSongProgress(hard, "hot-cross-buns", "hard"), {
     completedRuns: 1,
     bestScore: 800,
     bestRank: "C",
+    perfectRuns: 0,
   });
   assert.equal(getSongProgress(hard, "hot-cross-buns", "medium"), undefined);
   assert.equal(
@@ -65,7 +68,31 @@ test("increments completed runs without replacing a higher best score", () => {
     completedRuns: 2,
     bestScore: 2_400,
     bestRank: "A",
+    perfectRuns: 0,
   });
+});
+
+test("caps mistake-free Flow mastery at five gold stars", () => {
+  let progress = createSongProgress();
+  for (let run = 0; run < 7; run += 1) {
+    progress = recordSongCompletion(
+      progress,
+      "yankee-doodle",
+      "easy",
+      315_000,
+      "A+",
+      true,
+    );
+  }
+
+  assert.equal(
+    getSongProgress(progress, "yankee-doodle", "easy")?.perfectRuns,
+    5,
+  );
+  assert.equal(
+    getSongProgress(progress, "yankee-doodle", "easy")?.completedRuns,
+    7,
+  );
 });
 
 test("parses valid saved progress and recovers from corrupt storage", () => {
@@ -83,6 +110,17 @@ test("parses valid saved progress and recovers from corrupt storage", () => {
     "A−",
   );
   assert.deepEqual(parseSongProgress("not json"), createSongProgress());
+  const migrated = parseSongProgress(
+    JSON.stringify({
+      version: 1,
+      songs: {
+        legacy: {
+          easy: { completedRuns: 2, bestScore: 500, bestRank: "B" },
+        },
+      },
+    }),
+  );
+  assert.equal(getSongProgress(migrated, "legacy", "easy")?.perfectRuns, 0);
   assert.deepEqual(
     parseSongProgress(
       JSON.stringify({

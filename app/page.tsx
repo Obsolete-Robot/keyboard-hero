@@ -21,6 +21,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
+  Star,
   Usb,
   Volume2,
   X,
@@ -62,6 +63,7 @@ import {
   type SongFamily,
 } from "@/lib/songCatalog";
 import {
+  MAX_GOLD_STARS,
   SONG_PROGRESS_STORAGE_KEY,
   countClearedSongs,
   createSongProgress,
@@ -516,11 +518,12 @@ function SongLibrary({
                       family.id,
                       challengeLevel,
                     );
+                    const goldStars = savedProgress?.perfectRuns ?? 0;
                     return (
                       <button
                         aria-label={`Play ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}. ${
                           savedProgress
-                            ? `Cleared ${savedProgress.completedRuns} times. Best rank ${savedProgress.bestRank ?? "not recorded"}. Best score ${savedProgress.bestScore}.`
+                            ? `Cleared ${savedProgress.completedRuns} times. Best rank ${savedProgress.bestRank ?? "not recorded"}. Best score ${savedProgress.bestScore}. ${goldStars} of ${MAX_GOLD_STARS} gold mastery stars.`
                             : "Not cleared yet."
                         }`}
                         aria-pressed={family.id === activeFamilyId}
@@ -542,6 +545,23 @@ function SongLibrary({
                           {family.subtitle ? `${family.subtitle} · ` : ""}
                           {family.composer}
                         </div>
+                        <span
+                          aria-label={`${goldStars} of ${MAX_GOLD_STARS} gold mastery stars earned`}
+                          className="song-card-mastery"
+                        >
+                          <small>Flow mastery</small>
+                          <span aria-hidden="true">
+                            {Array.from({ length: MAX_GOLD_STARS }, (_, index) => (
+                              <Star
+                                className={index < goldStars ? "is-earned" : ""}
+                                fill={index < goldStars ? "currentColor" : "none"}
+                                key={index}
+                                size={17}
+                              />
+                            ))}
+                          </span>
+                          <b>{goldStars}/{MAX_GOLD_STARS}</b>
+                        </span>
                         <div
                           className={`song-card-progress${
                             savedProgress ? " is-cleared" : ""
@@ -819,19 +839,20 @@ export default function Home() {
     }
 
     recordedCompletionRef.current = song.id;
-    const performanceRank = buildPerformanceReport(
+    const performanceReport = buildPerformanceReport(
       song,
       hero.noteResults,
       hero.score,
       hero.settings.practiceMode,
-    ).grade;
+    );
     setSongProgress((current) =>
       recordSongCompletion(
         current,
         selectedSongFamily.id,
         challengeLevel,
         hero.score.points,
-        performanceRank,
+        performanceReport.grade,
+        performanceReport.perfectRun,
       ),
     );
   }, [

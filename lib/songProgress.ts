@@ -1,6 +1,7 @@
 import type { ChallengeLevel } from "@/lib/songCatalog";
 
 export const SONG_PROGRESS_STORAGE_KEY = "keyboard-hero.song-progress.v1";
+export const MAX_GOLD_STARS = 5;
 
 export const SONG_RANKS = [
   "F",
@@ -22,6 +23,8 @@ export interface SongProgressEntry {
   completedRuns: number;
   bestScore: number;
   bestRank?: SongRank;
+  /** Mistake-free full Flow runs, capped at five mastery stars. */
+  perfectRuns: number;
 }
 
 export interface SongProgressState {
@@ -83,6 +86,10 @@ export function parseSongProgress(raw: string | null): SongProgressState {
         const completedRuns = normalizedInteger(storedEntry.completedRuns);
         const bestScore = normalizedInteger(storedEntry.bestScore);
         const bestRank = normalizedRank(storedEntry.bestRank);
+        const perfectRuns = Math.min(
+          MAX_GOLD_STARS,
+          normalizedInteger(storedEntry.perfectRuns) ?? 0,
+        );
         if (completedRuns === null || completedRuns < 1 || bestScore === null) {
           continue;
         }
@@ -90,6 +97,7 @@ export function parseSongProgress(raw: string | null): SongProgressState {
         progress.songs[familyId][challenge] = {
           completedRuns,
           bestScore,
+          perfectRuns,
           ...(bestRank ? { bestRank } : {}),
         };
       }
@@ -114,6 +122,7 @@ export function recordSongCompletion(
   challenge: ChallengeLevel,
   score: number,
   rank?: string,
+  perfectRun = false,
 ): SongProgressState {
   const existing = getSongProgress(progress, familyId, challenge);
   const normalizedScore = normalizedInteger(score) ?? 0;
@@ -128,6 +137,10 @@ export function recordSongCompletion(
         [challenge]: {
           completedRuns: (existing?.completedRuns ?? 0) + 1,
           bestScore: Math.max(existing?.bestScore ?? 0, normalizedScore),
+          perfectRuns: Math.min(
+            MAX_GOLD_STARS,
+            (existing?.perfectRuns ?? 0) + (perfectRun ? 1 : 0),
+          ),
           ...(bestRank ? { bestRank } : {}),
         },
       },

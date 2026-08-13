@@ -393,7 +393,7 @@ export default function PerformanceResults({
             </div>
             <span className="results-test-note">
               {practiceMode === "wait"
-                ? "Timing is unscored in Wait mode"
+                ? "Completion + accuracy · Wait grade capped at B"
                 : `${score.points.toLocaleString()} of ${report.targetScore.toLocaleString()} song target${
                     report.extraMisses > 0 ? " · extras count as zero" : ""
                   }`}

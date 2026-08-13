@@ -124,6 +124,8 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /sustainCelebration/);
   assert.match(page, /feedback\.earlyCaptured/);
   assert.match(page, /hero\.score\.sustainPoints/);
+  assert.match(page, /song-card-mastery/);
+  assert.match(page, /MAX_GOLD_STARS/);
   assert.match(page, /<PerformanceResults/);
   assert.match(page, /recentFeedbackToasts\.map/);
   assert.match(page, /className="performance-feedback-toasts"/);
@@ -507,6 +509,7 @@ test("grades the score sheet from timing, completion, and extra misses", async (
   assert.equal(targetRun.targetScore, 1010);
   assert.equal(targetRun.testScore, 100);
   assert.equal(targetRun.grade, "A+");
+  assert.equal(targetRun.perfectRun, true);
 
   const held = buildPerformanceReport(
     song(1),
@@ -574,11 +577,24 @@ test("grades the score sheet from timing, completion, and extra misses", async (
     score({ combo: 1, bestCombo: 1, hits: 1 }),
     "wait",
   );
-  assert.equal(skipped.testScore, 0);
+  assert.equal(skipped.testScore, 43);
   assert.equal(skipped.grade, "F");
   assert.equal(skipped.rows[0].points, 0);
   assert.match(skipped.rows[0].detail, /unscored in Wait mode/);
   assert.equal(skipped.missedOrUnplayed, 1);
+
+  const flawlessWait = buildPerformanceReport(
+    song(2),
+    new Map([
+      ["note-0", result("note-0", "perfect")],
+      ["note-1", result("note-1", "perfect")],
+    ]),
+    score({ combo: 2, bestCombo: 2, hits: 2 }),
+    "wait",
+  );
+  assert.equal(flawlessWait.testScore, 86);
+  assert.equal(flawlessWait.grade, "B");
+  assert.equal(flawlessWait.perfectRun, false);
 
   const spammed = buildPerformanceReport(
     song(1),
@@ -588,6 +604,7 @@ test("grades the score sheet from timing, completion, and extra misses", async (
   );
   assert.equal(spammed.testScore, 50);
   assert.equal(spammed.grade, "F");
+  assert.equal(spammed.perfectRun, false);
   assert.match(spammed.rows[3].detail, /1 extras/);
 
   const demo = buildPerformanceReport(song(2), new Map(), score(), "listen");
