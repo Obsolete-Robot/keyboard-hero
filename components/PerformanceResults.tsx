@@ -9,7 +9,7 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
-import { Play, RotateCcw } from "lucide-react";
+import { Play, RotateCcw, Star } from "lucide-react";
 
 import type {
   KeyboardHeroScore,
@@ -22,6 +22,7 @@ import {
   type MotionPreference,
 } from "@/lib/motionPreference";
 import { buildPerformanceReport } from "@/lib/performanceReport";
+import { MAX_GOLD_STARS } from "@/lib/songProgress";
 import type { Song } from "@/lib/songs";
 
 const RESULT_REVEAL = {
@@ -78,6 +79,7 @@ interface PerformanceResultsProps {
   noteResults: ReadonlyMap<string, NoteResult>;
   score: KeyboardHeroScore;
   practiceMode: PracticeMode;
+  masteryStars: number;
   motionPreference: MotionPreference;
   onCue: (cue: PerformanceCue, variant?: number) => void;
   onReplay: () => void;
@@ -89,6 +91,7 @@ export default function PerformanceResults({
   noteResults,
   score,
   practiceMode,
+  masteryStars,
   motionPreference,
   onCue,
   onReplay,
@@ -419,6 +422,33 @@ export default function PerformanceResults({
               </em>
             </div>
           </div>
+        </div>
+
+        <div
+          aria-label={`${
+            report.perfectRun ? "Gold mastery star earned. " : ""
+          }${masteryStars} of ${MAX_GOLD_STARS} Flow mastery stars.`}
+          className={`results-mastery-award${
+            report.perfectRun ? " is-earned" : ""
+          }`}
+        >
+          <div className="results-mastery-copy">
+            <span>{report.perfectRun ? "Perfect Flow run" : "Flow mastery"}</span>
+            <strong>
+              {report.perfectRun ? "Gold star earned" : "Keep the clean streak going"}
+            </strong>
+          </div>
+          <span className="results-mastery-stars" aria-hidden="true">
+            {Array.from({ length: MAX_GOLD_STARS }, (_, index) => (
+              <Star
+                className={index < masteryStars ? "is-earned" : ""}
+                fill={index < masteryStars ? "currentColor" : "none"}
+                key={index}
+                size={22}
+              />
+            ))}
+          </span>
+          <b>{masteryStars}/{MAX_GOLD_STARS}</b>
         </div>
 
         <div className="results-feedback">

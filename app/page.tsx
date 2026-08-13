@@ -2745,6 +2745,7 @@ export default function Home() {
 
       {songComplete && !hero.quickLoopEnabled && (
         <PerformanceResults
+          masteryStars={currentSongProgress?.perfectRuns ?? 0}
           motionPreference={hero.settings.motionPreference}
           noteResults={hero.noteResults}
           onCue={hero.playPerformanceCue}

@@ -1587,6 +1587,66 @@ input:focus-visible {
   font-style: normal;
 }
 
+.results-mastery-award {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  margin: 13px 0 0 42px;
+  padding: 10px 14px;
+  border: 1px solid rgba(9, 9, 12, 0.22);
+  color: rgba(9, 9, 12, 0.58);
+  background: rgba(9, 9, 12, 0.035);
+  opacity: 0;
+  animation: results-feedback-in 420ms var(--feedback-delay, 4120ms) ease-out both;
+}
+
+.results-mastery-award.is-earned {
+  border-color: #a56d00;
+  color: #8a5900;
+  background: linear-gradient(90deg, rgba(255, 194, 43, 0.22), rgba(255, 220, 102, 0.08));
+  box-shadow: inset 4px 0 0 #d99500;
+}
+
+.results-mastery-copy {
+  min-width: 0;
+}
+
+.results-mastery-copy span,
+.results-mastery-copy strong {
+  display: block;
+  text-transform: uppercase;
+}
+
+.results-mastery-copy span {
+  font: 800 7px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+}
+
+.results-mastery-copy strong {
+  margin-top: 4px;
+  color: var(--paper-ink);
+  font: 400 20px/0.85 var(--font-display);
+  letter-spacing: 0.025em;
+}
+
+.results-mastery-stars {
+  display: inline-flex;
+  gap: 3px;
+  color: rgba(9, 9, 12, 0.2);
+}
+
+.results-mastery-stars svg.is-earned {
+  color: #d99500;
+  filter: drop-shadow(0 1px 0 rgba(9, 9, 12, 0.22));
+}
+
+.results-mastery-award > b {
+  min-width: 31px;
+  color: var(--paper-ink);
+  font: 850 10px/1 var(--font-mono);
+}
+
 .results-feedback {
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
@@ -5480,6 +5540,32 @@ kbd {
   .results-grade-stamp span,
   .results-grade-stamp em {
     font-size: 7px;
+  }
+
+  .results-mastery-award {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 9px 10px;
+  }
+
+  .results-mastery-copy strong {
+    font-size: 18px;
+  }
+
+  .results-mastery-stars {
+    gap: 1px;
+  }
+
+  .results-mastery-stars svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .results-mastery-award > b {
+    grid-column: 2;
+    font-size: 8px;
+    text-align: right;
   }
 
   .results-feedback {

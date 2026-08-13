@@ -323,6 +323,9 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(results, /"test-score"/);
   assert.match(results, /`stamp-\$\{gradeOutcome\}`/);
   assert.match(results, /results-grade-stamp stamp-\$\{gradeOutcome\}/);
+  assert.match(results, /Gold star earned/);
+  assert.match(results, /results-mastery-stars/);
+  assert.match(page, /masteryStars=\{currentSongProgress\?\.perfectRuns \?\? 0\}/);
   assert.match(appCss, /@keyframes results-grade-fail-stamp/);
   assert.match(engine, /playPerformanceCue/);
   assert.match(results, /Play it again/);
@@ -554,6 +557,37 @@ test("grades the score sheet from timing, completion, and extra misses", async (
     held.rows.reduce((total, row) => total + row.points, 0),
     1330,
   );
+
+  const partialHoldSong = song(1);
+  partialHoldSong.notes[0].durationBeats = 2;
+  const partialHold = buildPerformanceReport(
+    partialHoldSong,
+    new Map([
+      [
+        "note-0",
+        {
+          ...result("note-0", "perfect"),
+          sustain: {
+            grade: "partial",
+            heldBeats: 1,
+            requiredBeats: 1.5,
+            progress: 2 / 3,
+            pointsAwarded: 80,
+            multiplier: 1,
+          },
+        },
+      ],
+    ]),
+    score({
+      points: 1090,
+      sustainPoints: 80,
+      combo: 1,
+      bestCombo: 1,
+      hits: 1,
+    }),
+    "flow",
+  );
+  assert.equal(partialHold.perfectRun, true);
 
   const adjusted = buildPerformanceReport(
     song(1),
