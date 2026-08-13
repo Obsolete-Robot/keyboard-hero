@@ -19,6 +19,20 @@ No controller is required for a test drive. The lower computer-keyboard row
 (`Z` through `M`) plays C3–B3; the upper row (`Q` through `I`) plays C4–C5,
 with number/letter keys between them for the black notes.
 
+## Full and demo builds
+
+The checked-in game is fully unlocked by default. Release access is controlled
+by `keyboard-hero.config.ts` in the project root:
+
+- Keep `demoMode: false` for the full version on your own site.
+- Change it to `demoMode: true` before building the itch.io demo. That build
+  keeps one song per venue playable in Easy, Medium, and Hard, shows every other
+  song as **DEMO LOCKED**, and opens the full-version purchase panel when a
+  locked song is selected.
+
+Run `npm test` after changing the release setting so the production build and
+smoke tests use the intended edition.
+
 ## Practice tools
 
 - Six-step beginner training room for finger placement, first chords, and a

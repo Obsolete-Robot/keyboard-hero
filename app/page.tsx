@@ -34,10 +34,10 @@ import KeyboardStage, {
   type KeyboardStageHand,
   type KeyboardStageNote,
 } from "@/components/KeyboardStage";
+import { KEYBOARD_HERO_CONFIG } from "@/keyboard-hero.config";
 import PerformanceResults from "@/components/PerformanceResults";
 import {
   DEMO_SONG_FAMILIES,
-  DEMO_SONG_FAMILY_IDS,
   isDemoSongFamily,
 } from "@/lib/demoAccess";
 import { buildSongFingeringGuide } from "@/lib/fingering";
@@ -97,6 +97,17 @@ const DEFAULT_SONG = getSongChart(
   DEFAULT_SONG_FAMILY,
   DEFAULT_CHALLENGE_LEVEL,
 );
+const DEMO_MODE = KEYBOARD_HERO_CONFIG.demoMode;
+const PLAYABLE_SONG_FAMILIES = DEMO_MODE
+  ? DEMO_SONG_FAMILIES
+  : SONG_FAMILIES;
+const PLAYABLE_SONG_FAMILY_IDS = PLAYABLE_SONG_FAMILIES.map(
+  (family) => family.id,
+);
+
+function isSongFamilyPlayable(family: Pick<SongFamily, "id">): boolean {
+  return !DEMO_MODE || isDemoSongFamily(family);
+}
 
 const CHALLENGE_DETAILS: Record<
   ChallengeLevel,
@@ -342,7 +353,8 @@ function ChallengeSelector({
         <span>Choose your chart</span>
         <strong>{CHALLENGE_DETAILS[value].shortDescription}</strong>
         <small>
-          {clearedSongs} of {availableSongs} demo stages cleared
+          {clearedSongs} of {availableSongs} {DEMO_MODE ? "demo " : ""}stages
+          cleared
         </small>
       </div>
       <div className="challenge-segments">
@@ -384,7 +396,7 @@ function SongLibrary({
   const [lockedFamily, setLockedFamily] = useState<SongFamily | null>(null);
   const clearedSongs = countClearedSongs(
     progress,
-    [...DEMO_SONG_FAMILY_IDS],
+    PLAYABLE_SONG_FAMILY_IDS,
     challengeLevel,
   );
   const careerTiers = [...new Set(SONG_FAMILIES.map((family) => family.careerTier))]
@@ -503,14 +515,25 @@ function SongLibrary({
         <header className="modal-head">
           <div>
             <div className="modal-kicker">
-              {DEMO_SONG_FAMILIES.length}-song demo tour · 3 ways to play
+              {DEMO_MODE
+                ? `${DEMO_SONG_FAMILIES.length}-song demo tour · 3 ways to play`
+                : `${SONG_FAMILIES.length}-song world tour · 3 ways to play`}
             </div>
             <h2>Choose your next stage.</h2>
-            <p>
-              Play one featured song from every venue in Easy, Medium, or Hard.
-              The rest of the {SONG_FAMILIES.length}-song world tour is waiting
-              in the full version.
-            </p>
+            {DEMO_MODE ? (
+              <p>
+                Play one featured song from every venue in Easy, Medium, or
+                Hard. The rest of the {SONG_FAMILIES.length}-song world tour is
+                waiting in the full version.
+              </p>
+            ) : (
+              <p>
+                Each challenge has its own complete {SONG_FAMILIES.length}-song
+                climb. Start with a one-hand melody, add the second hand and
+                chord hits, or take on the full piano-style chart—all within the
+                same 25 keys.
+              </p>
+            )}
           </div>
           <button
             aria-label="Close song library"
@@ -523,7 +546,7 @@ function SongLibrary({
         </header>
 
         <ChallengeSelector
-          availableSongs={DEMO_SONG_FAMILIES.length}
+          availableSongs={PLAYABLE_SONG_FAMILIES.length}
           clearedSongs={clearedSongs}
           onChange={onChallengeChange}
           value={challengeLevel}
@@ -543,15 +566,26 @@ function SongLibrary({
                     <h3>{CAREER_VENUES[tier - 1] ?? `Tour Stop ${tier}`}</h3>
                   </div>
                   <p>
-                    {demoSongCount} demo song · {lockedSongCount} full-version
-                    tracks · Songs {String(firstRank).padStart(2, "0")}–
-                    {String(lastRank).padStart(2, "0")}
+                    {DEMO_MODE ? (
+                      <>
+                        {demoSongCount} demo song · {lockedSongCount}{" "}
+                        full-version tracks · Songs{" "}
+                        {String(firstRank).padStart(2, "0")}–
+                        {String(lastRank).padStart(2, "0")}
+                      </>
+                    ) : (
+                      <>
+                        Songs {String(firstRank).padStart(2, "0")}–
+                        {String(lastRank).padStart(2, "0")} · The set gets
+                        tougher from left to right.
+                      </>
+                    )}
                   </p>
                 </header>
                 <div className="song-grid">
                   {families.map((family) => {
                     const chart = getSongChart(family, challengeLevel);
-                    const demoUnlocked = isDemoSongFamily(family);
+                    const songPlayable = isSongFamilyPlayable(family);
                     const savedProgress = getSongProgress(
                       progress,
                       family.id,
@@ -560,29 +594,33 @@ function SongLibrary({
                     const goldStars = savedProgress?.perfectRuns ?? 0;
                     return (
                       <button
-                        aria-haspopup={demoUnlocked ? undefined : "dialog"}
+                        aria-haspopup={songPlayable ? undefined : "dialog"}
                         aria-label={`${
-                          demoUnlocked
+                          songPlayable
                             ? "Play"
                             : "Demo locked. View the full version to unlock"
                         } ${family.title} on ${CHALLENGE_DETAILS[challengeLevel].label}. ${
-                          demoUnlocked && savedProgress
+                          songPlayable && savedProgress
                             ? `Cleared ${savedProgress.completedRuns} times. Best rank ${savedProgress.bestRank ?? "not recorded"}. Best score ${savedProgress.bestScore}. ${goldStars} of ${MAX_GOLD_STARS} gold mastery stars.`
-                            : demoUnlocked
+                            : songPlayable
                               ? "Not cleared yet."
                               : "Opens the full-version purchase panel."
                         }`}
                         aria-pressed={
-                          demoUnlocked ? family.id === activeFamilyId : undefined
+                          songPlayable ? family.id === activeFamilyId : undefined
                         }
                         className={`song-card${
                           family.id === activeFamilyId ? " selected" : ""
-                        }${demoUnlocked && savedProgress ? " is-cleared" : ""}${
-                          demoUnlocked ? " is-demo-song" : " is-demo-locked"
+                        }${songPlayable && savedProgress ? " is-cleared" : ""}${
+                          DEMO_MODE
+                            ? songPlayable
+                              ? " is-demo-song"
+                              : " is-demo-locked"
+                            : ""
                         }`}
                         key={family.id}
                         onClick={() =>
-                          demoUnlocked
+                          songPlayable
                             ? onSelect(family)
                             : openPurchasePanel(family)
                         }
@@ -592,16 +630,18 @@ function SongLibrary({
                           SONG {String(family.courseRank).padStart(2, "0")} · {family.style}
                         </span>
                         <span className="song-card-challenge">
-                          {demoUnlocked
-                            ? `${CHALLENGE_DETAILS[challengeLevel].label} · Demo song`
-                            : "Demo locked"}
+                          {DEMO_MODE
+                            ? songPlayable
+                              ? `${CHALLENGE_DETAILS[challengeLevel].label} · Demo song`
+                              : "Demo locked"
+                            : CHALLENGE_DETAILS[challengeLevel].label}
                         </span>
                         <h4>{family.title}</h4>
                         <div className="song-composer">
                           {family.subtitle ? `${family.subtitle} · ` : ""}
                           {family.composer}
                         </div>
-                        {demoUnlocked ? (
+                        {songPlayable ? (
                           <>
                             <span
                               aria-label={`${goldStars} of ${MAX_GOLD_STARS} gold mastery stars earned`}
@@ -703,7 +743,7 @@ function SongLibrary({
           })}
         </div>
 
-        {lockedFamily && (
+        {DEMO_MODE && lockedFamily && (
           <div className="purchase-gate-backdrop">
             <button
               aria-label="Close full-version panel"
@@ -1589,7 +1629,7 @@ export default function Home() {
 
   const selectSong = useCallback(
     (nextFamily: SongFamily) => {
-      if (!isDemoSongFamily(nextFamily)) return;
+      if (!isSongFamilyPlayable(nextFamily)) return;
       pauseForLibrary();
       if (activeTrainingLesson) {
         setBackingBandForTraining(trainingReturnBackingBandRef.current);

@@ -4,6 +4,7 @@ import test from "node:test";
 
 register(new URL("./path-alias-loader.mjs", import.meta.url));
 
+const { KEYBOARD_HERO_CONFIG } = await import("../keyboard-hero.config.ts");
 const {
   DEMO_SONG_FAMILIES,
   DEMO_SONG_FAMILY_IDS,
@@ -14,6 +15,22 @@ const {
   SONG_FAMILIES,
   getSongChart,
 } = await import("../lib/songCatalog.ts");
+
+test("the release config selects a valid playable catalog", () => {
+  assert.equal(typeof KEYBOARD_HERO_CONFIG.demoMode, "boolean");
+
+  const playableFamilies = SONG_FAMILIES.filter(
+    (family) =>
+      !KEYBOARD_HERO_CONFIG.demoMode || isDemoSongFamily(family),
+  );
+
+  assert.equal(
+    playableFamilies.length,
+    KEYBOARD_HERO_CONFIG.demoMode
+      ? DEMO_SONG_FAMILIES.length
+      : SONG_FAMILIES.length,
+  );
+});
 
 test("the demo exposes exactly one song from the start of every venue", () => {
   const venueIds = new Set(SONG_FAMILIES.map((family) => family.careerTier));

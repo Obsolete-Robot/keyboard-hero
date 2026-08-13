@@ -173,6 +173,9 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(page, /<ChallengeSelector/);
   assert.match(page, /SONG_FAMILIES\.length/);
   assert.match(page, /DEMO_SONG_FAMILIES\.length/);
+  assert.match(page, /const DEMO_MODE = KEYBOARD_HERO_CONFIG\.demoMode/);
+  assert.match(page, /const PLAYABLE_SONG_FAMILIES = DEMO_MODE/);
+  assert.match(page, /return !DEMO_MODE \|\| isDemoSongFamily\(family\)/);
   assert.match(page, /isDemoSongFamily\(family\)/);
   assert.match(page, /DEMO LOCKED/);
   assert.match(page, /Purchase full version/);
