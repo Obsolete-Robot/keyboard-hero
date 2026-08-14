@@ -1847,6 +1847,7 @@ export default function Home() {
               pressedMidiNotes={hero.pressedNotes}
               power={hero.power}
               showHud={false}
+              strikeLabel={hero.isPlaying ? "" : "PLAY HERE"}
               theme="electric"
               travelBeats={noteApproachBeats}
             />

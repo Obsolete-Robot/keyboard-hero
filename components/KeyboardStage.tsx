@@ -31,6 +31,7 @@ const MAX_BATCHED_NOTES = 384;
 const MAX_RENDER_PIXEL_RATIO = 1.5;
 const KEY_CUE_LEAD_BEATS = 0.9;
 const KEY_CUE_LINGER_BEATS = 0.16;
+const HIT_SWEEP_WIDTH = 0.32;
 const BLACK_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 
 const KEY_LIGHT_VERTEX_SHADER = /* glsl */ `
@@ -1033,11 +1034,15 @@ export default function KeyboardStage({
       side: THREE.DoubleSide,
     });
     const hitSweep = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.32, 0.13),
+      new THREE.PlaneGeometry(HIT_SWEEP_WIDTH, 0.13),
       hitSweepMaterial,
     );
     hitSweep.rotation.x = -Math.PI / 2;
-    hitSweep.position.set(-KEYBOARD_WIDTH / 2, 0.125, HIT_Z);
+    hitSweep.position.set(
+      -(HIT_BAR_WIDTH - HIT_SWEEP_WIDTH) / 2,
+      0.125,
+      HIT_Z,
+    );
     world.add(hitSweep);
 
     const powerSurgeMaterial = new THREE.MeshBasicMaterial({
@@ -3015,9 +3020,9 @@ export default function KeyboardStage({
         hitSweepMaterial.opacity = 0.1;
       } else {
         const sweepProgress = (now * 0.00034) % 1;
+        const sweepRange = HIT_BAR_WIDTH - HIT_SWEEP_WIDTH;
         hitSweep.position.x =
-          -KEYBOARD_WIDTH / 2 - 0.4 +
-          sweepProgress * (KEYBOARD_WIDTH + 0.8);
+          -sweepRange / 2 + sweepProgress * sweepRange;
         hitSweepMaterial.opacity =
           0.12 + Math.sin(sweepProgress * Math.PI) * 0.2;
       }
@@ -3169,6 +3174,16 @@ export default function KeyboardStage({
         : 0),
     0,
   );
+  const strikeLabelVisible =
+    strikeLabel.trim().length > 0 &&
+    !notes.some((note) => {
+      if (note.state === "hit" || note.state === "missed") return false;
+      const duration = Math.max(note.durationBeats ?? 0.28, 0.28);
+      return (
+        note.startBeat - currentBeat <= KEY_CUE_LEAD_BEATS &&
+        note.startBeat + duration >= currentBeat - KEY_CUE_LINGER_BEATS
+      );
+    });
 
   return (
     <div
@@ -3196,12 +3211,16 @@ export default function KeyboardStage({
           data-ready={ready ? "true" : "false"}
           aria-hidden="true"
         >
-          <div className="kh-stage__strike-sweep" />
-          <div className="kh-stage__strike-label">
-            <i />
-            <span>{strikeLabel}</span>
-            <i />
+          <div className="kh-stage__strike-track">
+            <div className="kh-stage__strike-sweep" />
           </div>
+          {strikeLabelVisible && (
+            <div className="kh-stage__strike-label">
+              <i />
+              <span>{strikeLabel}</span>
+              <i />
+            </div>
+          )}
         </div>
       )}
 

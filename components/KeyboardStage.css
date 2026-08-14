@@ -141,13 +141,19 @@
   content: "";
 }
 
-.kh-stage__strike-sweep {
+.kh-stage__strike-track {
   position: absolute;
   z-index: 1;
-  top: -2px;
+  inset: -2px 0;
+  overflow: hidden;
+}
+
+.kh-stage__strike-sweep {
+  position: absolute;
+  top: 0;
   left: -18%;
   width: 12%;
-  height: 6px;
+  height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.78), transparent);
   filter: blur(1px);
   mix-blend-mode: screen;

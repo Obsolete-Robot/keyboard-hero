@@ -47,7 +47,6 @@ test("server-renders the Keyboard Hero game shell", async () => {
   assert.match(html, /Open the training room/);
   assert.match(html, /Six slow, repeatable steps from finger placement to Fr.re Jacques/);
   assert.match(html, /Three-dimensional 25-key practice keyboard/);
-  assert.match(html, /PLAY HERE/);
   assert.match(html, /Stage score/);
   assert.match(html, /Live streak/);
   assert.match(html, /Combo energy/);
@@ -254,7 +253,11 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /strikeLabel = "PLAY HERE"/);
   assert.match(stage, /const KEY_LANE_COLORS = \[/);
   assert.match(stage, /const HIT_BAR_WIDTH = KEYBOARD_WIDTH \+ 0\.42/);
+  assert.match(stage, /const HIT_SWEEP_WIDTH = 0\.32/);
   assert.match(stage, /BoxGeometry\(HIT_BAR_WIDTH, 0\.055, 0\.055\)/);
+  assert.match(stage, /const sweepRange = HIT_BAR_WIDTH - HIT_SWEEP_WIDTH/);
+  assert.match(stage, /const strikeLabelVisible/);
+  assert.match(page, /strikeLabel=\{hero\.isPlaying \? "" : "PLAY HERE"\}/);
   assert.match(stage, /shockwave/);
   assert.match(stage, /KeyboardStagePowerState/);
   assert.match(stage, /powerSurgeRing/);
@@ -316,6 +319,7 @@ test("ships the finished game rather than starter assets", async () => {
   assert.match(stage, /fingerLabelMaterial\?\.dispose\(\)/);
   assert.match(stage, /keyFingerLabelTextures\.forEach\(\(texture\) => texture\.dispose\(\)\)/);
   assert.match(stageCss, /\.kh-stage__strike-zone \{[\s\S]*height: 2px;/);
+  assert.match(stageCss, /\.kh-stage__strike-track \{[\s\S]*overflow: hidden;/);
   assert.match(stageCss, /\.kh-stage--power/);
   assert.match(stageCss, /kh-stage-power-breathe/);
   assert.match(results, /Official score sheet/);
