@@ -66,5 +66,5 @@ test("the rest of the catalog remains present but demo locked", () => {
   );
 
   assert.equal(lockedFamilies.length, SONG_FAMILIES.length - DEMO_SONG_FAMILIES.length);
-  assert.equal(lockedFamilies.length, 30);
+  assert.equal(lockedFamilies.length, 31);
 });

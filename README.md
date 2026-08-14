@@ -37,7 +37,7 @@ smoke tests use the intended edition.
 
 - Six-step beginner training room for finger placement, first chords, and a
   slow two-hand bridge into Frere Jacques
-- A 35-song, five-venue career made from original and public-domain music
+- A 36-song, five-venue career made from original and public-domain music
 - Easy, Medium, and Hard arrangements for every song: one-hand melody,
   two-hand accompaniment with occasional chords, and full piano-style voicings
 - A Guitar Hero-style learning curve that grows within every challenge level

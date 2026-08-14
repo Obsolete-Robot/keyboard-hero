@@ -21,7 +21,7 @@ const {
 } = await import("../lib/accompaniment.ts");
 
 const EXPECTED_LEVELS = ["easy", "medium", "hard"];
-const EXPECTED_FAMILY_COUNT = 35;
+const EXPECTED_FAMILY_COUNT = 36;
 const EXPECTED_CHART_COUNT =
   EXPECTED_FAMILY_COUNT * EXPECTED_LEVELS.length;
 const CONCRETE_HANDS = new Set(["left", "right"]);
@@ -92,7 +92,7 @@ function challengeRatingFor(family, level, song, allCatalogEntry) {
   );
 }
 
-test("ships 35 song families with Easy, Medium, and Hard charts", () => {
+test("ships 36 song families with Easy, Medium, and Hard charts", () => {
   assert.deepEqual([...CHALLENGE_LEVELS], EXPECTED_LEVELS);
   assert.ok(Array.isArray(SONG_FAMILIES));
   assert.equal(SONG_FAMILIES.length, EXPECTED_FAMILY_COUNT);
@@ -105,11 +105,11 @@ test("ships 35 song families with Easy, Medium, and Hard charts", () => {
   assert.deepEqual(
     [...ranks].sort((left, right) => left - right),
     Array.from({ length: EXPECTED_FAMILY_COUNT }, (_, index) => index + 1),
-    "course ranks must cover every rank from 1 through 35 exactly once",
+    "course ranks must cover every rank from 1 through 36 exactly once",
   );
 });
 
-test("exports exactly the same 105 unique charts as the family lookup", () => {
+test("exports exactly the same 108 unique charts as the family lookup", () => {
   assert.ok(Array.isArray(ALL_SONG_CHARTS));
   assert.equal(ALL_SONG_CHARTS.length, EXPECTED_CHART_COUNT);
 
@@ -135,6 +135,26 @@ test("exports exactly the same 105 unique charts as the family lookup", () => {
     new Set(resolvedSongs.map((song) => song.id)),
     "ALL_SONG_CHARTS must contain each chart returned by getSongChart exactly once",
   );
+});
+
+test("The Entertainer and Itsy Bitsy Spider have charts in their fitting venues", () => {
+  const expectedFamilies = [
+    { id: "itsy-bitsy-spider", title: "Itsy Bitsy Spider", careerTier: 1 },
+    { id: "the-entertainer", title: "The Entertainer", careerTier: 5 },
+  ];
+
+  for (const expected of expectedFamilies) {
+    const family = SONG_FAMILIES.find((entry) => entry.id === expected.id);
+    assert.ok(family, `${expected.title} must appear in the song library`);
+    assert.equal(family.title, expected.title);
+    assert.equal(family.careerTier, expected.careerTier);
+
+    for (const level of EXPECTED_LEVELS) {
+      const chart = getSongChart(family, level);
+      assert.equal(chart.challengeLevel, level);
+      assert.ok(chart.notes.length > 0, `${expected.id}/${level}`);
+    }
+  }
 });
 
 test("every Easy and Medium chart has a non-empty harder Power Mode orchestration", () => {
@@ -349,7 +369,7 @@ test("career accompaniment has distinct song-level grooves instead of one preset
 
   assert.ok(
     new Set(signatures).size >= 30,
-    "the 35-song career should have at least 30 materially distinct band grooves",
+    "the 36-song career should have at least 30 materially distinct band grooves",
   );
   assert.equal(
     getSongChart("minuet-in-g", "easy").accompaniment.drumKit,
@@ -436,7 +456,7 @@ test("Hard charts use both hands and include full chords", () => {
   }
 });
 
-test("each challenge level gets strictly harder from course rank 1 to 35", () => {
+test("each challenge level gets strictly harder from course rank 1 to 36", () => {
   const familiesByRank = [...SONG_FAMILIES].sort(
     (left, right) => left.courseRank - right.courseRank,
   );

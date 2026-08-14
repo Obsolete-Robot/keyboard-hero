@@ -31,7 +31,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const origin = `${protocol}://${host}`;
   const title = "Keyboard Hero — Learn Piano Like a Headliner";
   const description =
-    "A MIDI-powered piano trainer with 35 songs, Easy through Hard arrangements, practice loops, and a concert-stage feel.";
+    "A MIDI-powered piano trainer with 36 songs, Easy through Hard arrangements, practice loops, and a concert-stage feel.";
 
   return {
     metadataBase: new URL(origin),
@@ -47,7 +47,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: `${origin}/og-career.png`,
           width: 1731,
           height: 909,
-          alt: "Keyboard Hero — 35 songs with Easy, Medium, and Hard arrangements.",
+          alt: "Keyboard Hero — 36 songs with Easy, Medium, and Hard arrangements.",
         },
       ],
     },

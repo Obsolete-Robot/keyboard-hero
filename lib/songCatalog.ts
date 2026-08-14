@@ -34,7 +34,7 @@ export type CareerTier = (typeof CAREER_TIERS)[number];
 export interface SongChart extends Song {
   familyId: string;
   challengeLevel: ChallengeLevel;
-  /** Strictly increases from career rank 1 through 35 for every challenge. */
+  /** Strictly increases from career rank 1 through 36 for every challenge. */
   challengeRating: number;
   courseRank: number;
   careerTier: CareerTier;
@@ -823,6 +823,20 @@ const PUBLIC_DOMAIN_THEMES: readonly PublicDomainTheme[] = [
     repeats: 1,
   }),
   theme({
+    id: "itsy-bitsy-spider",
+    title: "Itsy Bitsy Spider",
+    subtitle: "A climbing nursery rhyme with cheerful phrase echoes",
+    composer: "Traditional American",
+    bpm: 88,
+    key: "C major",
+    timeSignature: [4, 4],
+    style: "Nursery rhyme",
+    focus: "repeated-note control, stepwise motion, and five-finger shifts",
+    melody: [[55, 0.5], [60, 0.5], [60, 0.5], [60, 0.5], [62, 1], [64, 1], [64, 0.5], [64, 0.5], [62, 0.5], [60, 0.5], [62, 1], [64, 0.5], [60, 0.5], [64, 0.5], [64, 0.5], [65, 1], [67, 2], [67, 0.5], [65, 0.5], [64, 0.5], [65, 0.5], [67, 1], [64, 1], [60, 0.5], [60, 0.5], [62, 1], [64, 2], [64, 0.5], [62, 0.5], [60, 0.5], [62, 0.5], [64, 1], [60, 1], [55, 0.5], [60, 0.5], [60, 0.5], [60, 0.5], [62, 1], [64, 1], [64, 0.5], [62, 0.5], [60, 0.5], [62, 0.5], [64, 1], [60, 1]],
+    harmony: ["C", "G7", "C", "G7", "C", "G7", "C", "C"],
+    repeats: 1,
+  }),
+  theme({
     id: "lightly-row",
     title: "Lightly Row",
     subtitle: "Smooth skips and gentle repetitions",
@@ -1156,6 +1170,7 @@ const CAREER_ORDER = [
   "au-clair-de-la-lune",
   "ode-to-joy",
   "twinkle-little-star",
+  "itsy-bitsy-spider",
   "lightly-row",
   "marys-two-hand-march",
   "london-bridge",
@@ -1188,7 +1203,7 @@ const CAREER_ORDER = [
   "neon-skyline-finale",
 ] as const;
 
-/** The 35-song, five-venue career path in its canonical unlock order. */
+/** The 36-song, five-venue career path in its canonical unlock order. */
 export const SONG_FAMILIES: readonly SongFamily[] = CAREER_ORDER.map(
   (id, index) => {
     const courseRank = index + 1;

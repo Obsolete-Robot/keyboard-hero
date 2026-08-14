@@ -76,6 +76,15 @@ export const ACCOMPANIMENT_PROFILES = {
     bass: [bass(0, "root", 0.44, 0.58), bass(0.5, "fifth", 0.35, 0.5)],
     harmony: [chord(0, 0.9, 0.3)], voicingOffset: 1,
   },
+  "itsy-bitsy-spider": {
+    name: "Storybook spider-step",
+    drumKit: "folk",
+    bassVoice: "pluck",
+    harmonyVoice: "bell",
+    kick: [0, 0.5], snare: [0.75], hats: OFFBEATS_4,
+    bass: [bass(0, "root", 0.32, 0.62), bass(0.5, "fifth", 0.26, 0.54)],
+    harmony: [chord(0.25, 0.2, 0.44), chord(0.75, 0.18, 0.4)], voicingOffset: 2,
+  },
   "lightly-row": {
     name: "Alpine folk skip",
     drumKit: "folk",
