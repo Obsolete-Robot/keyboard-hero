@@ -157,6 +157,79 @@ test("The Entertainer and Itsy Bitsy Spider have charts in their fitting venues"
   }
 });
 
+test("Itsy Bitsy Spider follows the notated C-major 6/8 melody without octave folding", () => {
+  const family = SONG_FAMILIES.find((entry) => entry.id === "itsy-bitsy-spider");
+  assert.ok(family);
+  const easy = family.charts.easy;
+  const firstPassEnd = easy.sections[0].endBeat;
+  const melody = easy.notes
+    .filter((note) => note.hand === "right" && note.startBeat < firstPassEnd)
+    .sort((left, right) => left.startBeat - right.startBeat);
+
+  assert.deepEqual(easy.timeSignature, [6, 8]);
+  assert.equal(easy.key, "C major");
+  assert.deepEqual(
+    melody.slice(0, 13).map((note) => [note.midi, note.startBeat]),
+    [
+      [55, 2.5],
+      [60, 3], [60, 4], [60, 4.5], [62, 5.5],
+      [64, 6], [64, 7.5], [64, 8.5],
+      [62, 9], [60, 10], [62, 10.5], [64, 11.5],
+      [60, 12],
+    ],
+  );
+  assert.equal(Math.min(...melody.map((note) => note.midi)), 55);
+  assert.equal(Math.max(...melody.map((note) => note.midi)), 67);
+
+  const easyMelody = melody.map((note) => [
+    note.midi,
+    note.startBeat,
+    note.durationBeats,
+  ]);
+  for (const level of ["medium", "hard"]) {
+    const levelMelody = family.charts[level].notes
+      .filter((note) => note.hand === "right" && note.startBeat < firstPassEnd)
+      .sort((left, right) => left.startBeat - right.startBeat)
+      .map((note) => [note.midi, note.startBeat, note.durationBeats]);
+    assert.deepEqual(levelMelody, easyMelody, `${level} must preserve the score melody`);
+  }
+});
+
+test("The Entertainer uses Joplin's syncopated hook in the upper playable register", () => {
+  const family = SONG_FAMILIES.find((entry) => entry.id === "the-entertainer");
+  assert.ok(family);
+  const easy = family.charts.easy;
+  const firstPassEnd = easy.sections[0].endBeat;
+  const melody = easy.notes
+    .filter((note) => note.hand === "right" && note.startBeat < firstPassEnd)
+    .sort((left, right) => left.startBeat - right.startBeat);
+
+  assert.deepEqual(easy.timeSignature, [2, 4]);
+  assert.match(easy.key, /^A-flat major/);
+  assert.deepEqual(
+    melody.slice(0, 10).map((note) => [note.midi, note.startBeat]),
+    [
+      [58, 0], [59, 0.25], [60, 0.5], [68, 0.75], [60, 1.25],
+      [68, 1.5], [60, 2], [68, 2.25], [68, 3.75], [70, 4],
+    ],
+  );
+  assert.equal(Math.min(...melody.map((note) => note.midi)), 58);
+  assert.equal(Math.max(...melody.map((note) => note.midi)), 72);
+
+  const easyMelody = melody.map((note) => [
+    note.midi,
+    note.startBeat,
+    note.durationBeats,
+  ]);
+  for (const level of ["medium", "hard"]) {
+    const levelMelody = family.charts[level].notes
+      .filter((note) => note.hand === "right" && note.startBeat < firstPassEnd)
+      .sort((left, right) => left.startBeat - right.startBeat)
+      .map((note) => [note.midi, note.startBeat, note.durationBeats]);
+    assert.deepEqual(levelMelody, easyMelody, `${level} must preserve Joplin's hook`);
+  }
+});
+
 test("every Easy and Medium chart has a non-empty harder Power Mode orchestration", () => {
   for (const family of SONG_FAMILIES) {
     const easyLayers = buildComboOrchestrationLayers(

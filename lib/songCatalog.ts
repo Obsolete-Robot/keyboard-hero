@@ -71,6 +71,8 @@ interface PublicDomainTheme {
   harmony: readonly HarmonySymbol[];
   repeats?: number;
   articulation?: Articulation;
+  arrangement?: "melody-preserving";
+  attribution?: string;
 }
 
 const EPSILON = 0.000_001;
@@ -206,6 +208,16 @@ const rightVoicingFor = (symbol: HarmonySymbol, maximumNotes = 3): number[] => {
   const harmony = parseHarmony(symbol);
   const candidates: number[] = [];
   for (let midi = 60; midi <= MIDI_MAX; midi += 1) {
+    if (harmony.pitchClasses.includes(midi % 12)) candidates.push(midi);
+  }
+  return candidates.slice(0, maximumNotes);
+};
+
+/** Compact accompaniment voicing kept below middle C so the sourced tune stays untouched. */
+const leftVoicingFor = (symbol: HarmonySymbol, maximumNotes = 3): number[] => {
+  const harmony = parseHarmony(symbol);
+  const candidates: number[] = [];
+  for (let midi = MIDI_MIN; midi < 60; midi += 1) {
     if (harmony.pitchClasses.includes(midi % 12)) candidates.push(midi);
   }
   return candidates.slice(0, maximumNotes);
@@ -587,6 +599,65 @@ const addHardHarmony = (
   return result;
 };
 
+const addMelodyPreservingHarmony = (
+  melody: readonly NoteSeed[],
+  durationBeats: number,
+  signature: readonly [number, number],
+  progression: readonly HarmonySymbol[],
+  challenge: "medium" | "hard",
+): NoteSeed[] => {
+  const result = [...melody];
+  const meter = meterGrid(signature);
+  const measureCount = Math.ceil(durationBeats / meter.measureBeats);
+  const melodyOccupies = (midi: number, attack: number): boolean =>
+    melody.some(
+      (note) => note.midi === midi && Math.abs(note.startBeat - attack) < EPSILON,
+    );
+
+  for (let measure = 0; measure < measureCount; measure += 1) {
+    const start = measure * meter.measureBeats;
+    const symbol = harmonyAtMeasure(progression, measure);
+    const harmony = parseHarmony(symbol);
+    const root = bassMidiFor(harmony.rootPitchClass);
+    const chordAttack = start + meter.pulseBeats;
+
+    if (!melodyOccupies(root, start)) {
+      result.push(
+        seed(
+          root,
+          start,
+          Math.min(meter.pulseBeats * 0.72, durationBeats - start),
+          "left",
+          challenge === "hard" ? 82 : 74,
+          "normal",
+          true,
+        ),
+      );
+    }
+
+    const addChord = challenge === "hard" || measure % 4 === 3 || measure === measureCount - 1;
+    if (!addChord || chordAttack >= durationBeats - EPSILON) continue;
+
+    const voicing = leftVoicingFor(symbol, challenge === "hard" ? 3 : 2);
+    for (const midi of voicing) {
+      if (melodyOccupies(midi, chordAttack)) continue;
+      result.push(
+        seed(
+          midi,
+          chordAttack,
+          Math.min(meter.pulseBeats * 0.68, durationBeats - chordAttack),
+          "left",
+          challenge === "hard" ? 78 : 70,
+          "normal",
+          true,
+        ),
+      );
+    }
+  }
+
+  return result;
+};
+
 const arrangePublicDomainTheme = (
   theme: PublicDomainTheme,
   courseRank: number,
@@ -620,8 +691,12 @@ const arrangePublicDomainTheme = (
     performancePassBeats,
     performancePasses,
   );
-  const medium = addMediumHarmony(easy, durationBeats, theme.timeSignature, theme.harmony);
-  const hard = addHardHarmony(easy, durationBeats, theme.timeSignature, theme.harmony);
+  const medium = theme.arrangement === "melody-preserving"
+    ? addMelodyPreservingHarmony(easy, durationBeats, theme.timeSignature, theme.harmony, "medium")
+    : addMediumHarmony(easy, durationBeats, theme.timeSignature, theme.harmony);
+  const hard = theme.arrangement === "melody-preserving"
+    ? addMelodyPreservingHarmony(easy, durationBeats, theme.timeSignature, theme.harmony, "hard")
+    : addHardHarmony(easy, durationBeats, theme.timeSignature, theme.harmony);
 
   return buildFamily(
     {
@@ -639,7 +714,9 @@ const arrangePublicDomainTheme = (
         performancePassBeats / measureBeats,
       ),
       origin: "public-domain",
-      attribution: `Public-domain composition; original Keyboard Hero 25-key arrangement.`,
+      attribution:
+        theme.attribution ??
+        `Public-domain composition; original Keyboard Hero 25-key arrangement.`,
       durationBeats,
       performancePassBeats,
       performanceSectionLabels,
@@ -825,16 +902,18 @@ const PUBLIC_DOMAIN_THEMES: readonly PublicDomainTheme[] = [
   theme({
     id: "itsy-bitsy-spider",
     title: "Itsy Bitsy Spider",
-    subtitle: "A climbing nursery rhyme with cheerful phrase echoes",
+    subtitle: "The traditional climbing tune in lilting compound meter",
     composer: "Traditional American",
-    bpm: 88,
+    bpm: 132,
     key: "C major",
-    timeSignature: [4, 4],
+    timeSignature: [6, 8],
     style: "Nursery rhyme",
-    focus: "repeated-note control, stepwise motion, and five-finger shifts",
-    melody: [[55, 0.5], [60, 0.5], [60, 0.5], [60, 0.5], [62, 1], [64, 1], [64, 0.5], [64, 0.5], [62, 0.5], [60, 0.5], [62, 1], [64, 0.5], [60, 0.5], [64, 0.5], [64, 0.5], [65, 1], [67, 2], [67, 0.5], [65, 0.5], [64, 0.5], [65, 0.5], [67, 1], [64, 1], [60, 0.5], [60, 0.5], [62, 1], [64, 2], [64, 0.5], [62, 0.5], [60, 0.5], [62, 0.5], [64, 1], [60, 1], [55, 0.5], [60, 0.5], [60, 0.5], [60, 0.5], [62, 1], [64, 1], [64, 0.5], [62, 0.5], [60, 0.5], [62, 0.5], [64, 1], [60, 1]],
-    harmony: ["C", "G7", "C", "G7", "C", "G7", "C", "C"],
+    focus: "6/8 pulse, repeated-note control, and stepwise phrase shaping",
+    melody: [[null, 2.5], [55, 0.5], [60, 1], [60, 0.5], [60, 1], [62, 0.5], [64, 1.5], [64, 1], [64, 0.5], [62, 1], [60, 0.5], [62, 1], [64, 0.5], [60, 3], [64, 1.5], [64, 1], [65, 0.5], [67, 1.5], [67, 1.5], [65, 1], [64, 0.5], [65, 1], [67, 0.5], [64, 3], [60, 1.5], [60, 1], [62, 0.5], [64, 1.5], [64, 1.5], [62, 1], [60, 0.5], [62, 1], [64, 0.5], [60, 1.5], [55, 1], [55, 0.5], [60, 1], [60, 0.5], [60, 1], [62, 0.5], [64, 1.5], [64, 1], [64, 0.5], [62, 1], [60, 0.5], [62, 1], [64, 0.5], [60, 3]],
+    harmony: ["C", "C", "C", "G7", "C", "C", "C", "G7", "C", "C", "Am", "G7", "C", "C", "C", "G7", "C"],
     repeats: 1,
+    arrangement: "melody-preserving",
+    attribution: "Traditional public-domain melody; tune, 6/8 meter, and G3-G4 register transcribed from published notation; original Keyboard Hero accompaniment.",
   }),
   theme({
     id: "lightly-row",
@@ -1117,17 +1196,18 @@ const PUBLIC_DOMAIN_THEMES: readonly PublicDomainTheme[] = [
   theme({
     id: "the-entertainer",
     title: "The Entertainer",
-    subtitle: "Joplin syncopation in miniature",
+    subtitle: "Joplin's famous opening-strain phrase with its original syncopation",
     composer: "Scott Joplin",
-    bpm: 112,
-    key: "C major (adapted)",
+    bpm: 72,
+    key: "A-flat major (C-major score transposed to fit C3-C5)",
     timeSignature: [2, 4],
     style: "Ragtime",
     focus: "syncopation, chromatic passing tones, and stride coordination",
-    melody: [[59, 0.25], [60, 0.25], [64, 0.5], [60, 0.5], [64, 0.5], [60, 0.5], [64, 0.5], [60, 0.5], [64, 0.5], [65, 0.25], [66, 0.25], [67, 0.5], [69, 0.5], [67, 0.5], [64, 0.5], [65, 0.5], [67, 0.5], [64, 0.5], [60, 0.5], [62, 0.25], [63, 0.25], [64, 0.5], [60, 0.5], [62, 0.5], [64, 0.5], [67, 1], [64, 1], [60, 2]],
-    harmony: ["C", "C7", "F", "F#dim", "C", "A7", "D7", "G7", "C"],
-    repeats: 2,
-    articulation: "staccato",
+    melody: [[58, 0.25], [59, 0.25], [60, 0.25], [68, 0.5], [60, 0.25], [68, 0.5], [60, 0.25], [68, 1.5], [68, 0.25], [70, 0.25], [71, 0.25], [72, 0.25], [68, 0.25], [70, 0.25], [72, 0.5], [67, 0.25], [70, 0.5], [68, 1.5], [58, 0.25], [59, 0.25], [60, 0.25], [68, 0.5], [60, 0.25], [68, 0.5], [60, 0.25], [68, 1.75], [65, 0.25], [63, 0.25], [62, 0.25], [65, 0.25], [68, 0.25], [72, 0.5], [70, 0.25], [68, 0.25], [65, 0.25], [70, 1.5]],
+    harmony: ["Ab", "Db", "Eb7", "Ab", "Ab", "Db", "Bb7", "Eb7"],
+    repeats: 1,
+    arrangement: "melody-preserving",
+    attribution: "Scott Joplin's public-domain 1902 opening strain; melody and rhythm transcribed from the score and transposed as one unit for the 25-key range; original Keyboard Hero accompaniment.",
   }),
   theme({
     id: "in-the-hall-of-the-mountain-king",
