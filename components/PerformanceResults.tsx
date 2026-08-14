@@ -635,7 +635,7 @@ export default function PerformanceResults({
             <div className="results-gold-star-hero" ref={goldStarHeroRef}>
               <Star fill="currentColor" strokeWidth={1.15} />
               <span>
-                <strong>Gold star</strong>
+                <strong>Perfect</strong>
                 <em>Perfect Flow</em>
               </span>
             </div>

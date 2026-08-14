@@ -14,7 +14,8 @@ test("a perfect Flow run gets a full-card gold-star celebration", async () => {
   assert.match(results, /heroStar\.animate\(/);
   assert.match(results, /targetRect\.left \+ targetRect\.width \/ 2/);
   assert.match(results, /goldStarTargetRefs\.current\[index\] = node/);
-  assert.match(results, /Gold star/);
+  assert.match(results, /<strong>Perfect<\/strong>/);
+  assert.doesNotMatch(results, /<strong>Gold star<\/strong>/);
   assert.match(results, /Perfect Flow/);
 
   assert.match(styles, /\.results-gold-star-celebration/);
